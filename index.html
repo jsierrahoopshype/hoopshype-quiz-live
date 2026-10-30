@@ -7,52 +7,42 @@
 <title>HoopsHype NBA Quiz Live</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="quiz.css">
 </head>
 <body>
-<!-- The stage is a fixed 1080x1920 canvas (TikTok portrait) scaled to fit the window. -->
+<!-- Fixed 1080x1920 portrait canvas (TikTok LIVE), scaled to fit the window -->
 <div id="stage">
-  <header id="top">
-    <div class="brand">
-      <span class="brand-hh">HOOPSHYPE</span>
-      <span class="brand-quiz">NBA QUIZ LIVE</span>
-    </div>
-    <div class="top-right">
-      <div id="mult" class="chip hidden"></div>
-      <div id="pts" class="chip"></div>
-      <div id="timer">
-        <svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="44"/><circle id="timer-arc" class="arc" cx="50" cy="50" r="44"/></svg>
-        <span id="timer-num"></span>
-      </div>
-    </div>
+  <header id="masthead">
+    <div class="wordmark"><span class="hh">HOOPSHYPE</span><span class="sep"></span><span class="nq">NBA QUIZ</span></div>
+    <div id="gameno"></div>
   </header>
 
-  <div id="meta"></div>
+  <div id="themebar">
+    <div id="theme-name"></div>
+    <div id="pips"></div>
+  </div>
 
-  <main id="card">
-    <div id="card-inner"></div>
+  <main id="panel">
+    <div id="timebar"><div id="timefill"></div></div>
+    <div id="panel-body"></div>
   </main>
 
-  <div id="cta"></div>
-  <div id="ticker-correct"></div>
+  <div id="instruction"><span id="instr-text"></span><span id="clock"></span></div>
+  <div id="eventline"></div>
 
   <section id="vote">
-    <h2 id="vote-title">Next theme: your gifts decide</h2>
-    <div id="vote-tiles"></div>
-    <div id="vote-note"></div>
+    <div class="sec-title">Pick the next theme: send its gift</div>
+    <div id="vote-cols"></div>
   </section>
 
-  <section id="boards">
-    <div class="lb"><h3>This game</h3><ol id="lb-game"></ol></div>
-    <div class="lb"><h3>This stream</h3><ol id="lb-stream"></ol></div>
-    <div class="lb"><h3>Top supporters</h3><ol id="lb-gift"></ol></div>
+  <section id="tables">
+    <div class="tbl"><div class="sec-title">Leaderboard</div><ol id="lb-stream"></ol></div>
+    <div class="tbl"><div class="sec-title">Top supporters</div><ol id="lb-gift"></ol></div>
   </section>
 
-  <footer id="bottom">
-    <div id="likebar"><div id="likefill"></div><span id="liketext"></span></div>
-    <div id="hint-line"></div>
-    <div id="alert-strip"></div>
+  <footer id="likes">
+    <div id="likefill"></div><div id="liketext"></div>
   </footer>
 </div>
 <script src="quiz.js"></script>

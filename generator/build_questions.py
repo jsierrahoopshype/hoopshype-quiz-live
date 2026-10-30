@@ -39,6 +39,18 @@ def norm(s):
     s = re.sub(r"[^a-z0-9 ]", "", s.lower().replace("-", " "))
     return re.sub(r"\s+", " ", s).strip()
 
+SUFFIX = re.compile(r"\b(jr|sr|ii|iii|iv)\b")
+def strip_suffix(k):
+    k = re.sub(r"\(.*?\)", "", k)
+    return re.sub(r"\s+", " ", SUFFIX.sub("", k)).strip()
+
+HEADSHOT_ALIASES = {"predrag stojakovic": "peja stojakovic", "larry johnson 1969": "larry johnson"}
+
+# Before-2000 careers only make the cut for these icons. Everyone else must have played in 2000-01 or later.
+LEGENDS = {"Kareem Abdul-Jabbar", "Wilt Chamberlain", "Larry Bird", "Bill Russell", "Magic Johnson", "Oscar Robertson",
+           "Jerry West", "Julius Erving", "Charles Barkley", "Isiah Thomas", "Moses Malone", "Clyde Drexler",
+           "Dominique Wilkins", "Pete Maravich", "Kevin McHale", "James Worthy"}
+
 def season(y):
     """End year -> '2015-16'."""
     y = int(y)
@@ -185,12 +197,25 @@ def load(src):
     files = set()
     if os.path.exists(path("facefill")):
         files = {l.strip() for l in open(path("facefill"), encoding="utf-8") if l.strip()}
-    img = {}
+    img, stripped = {}, collections.defaultdict(list)
     for h in (heads if isinstance(heads, list) else heads.values()):
         fn = (h.get("headshot") or {}).get("filename") or ""
         stem = fn.rsplit(".", 1)[0]
         if stem and f"{stem}.webp" in files:
             img[norm(h["full_name"])] = f"{stem}.webp"
+            stripped[strip_suffix(norm(h["full_name"]))].append(f"{stem}.webp")
+    stat_names = {norm(n) for n in players}
+    for n in list(players):
+        k = norm(n)
+        if k in img:
+            continue
+        base = strip_suffix(k)
+        # "Jimmy Butler" -> "Jimmy Butler III", but never when the data has both a father and a son
+        if len(stripped.get(base, [])) == 1 and not any(x != k and strip_suffix(x) == base for x in stat_names):
+            img[k] = stripped[base][0]
+    for a, b in HEADSHOT_ALIASES.items():
+        if b in img:
+            img[a] = img[b]
     P["img"] = img
     return P
 
@@ -199,7 +224,14 @@ class Player:
     def __init__(self, name, raw):
         self.name = name
         self.key = norm(name)
-        self.seasons = sorted(raw["seasons"], key=lambda s: (s["y"], s["team"]))
+        # within a season with a mid-season trade, the team he came from goes first and the team he stayed with goes last
+        teams_by_year = collections.defaultdict(set)
+        for s in raw["seasons"]:
+            teams_by_year[s["y"]].add(s["team"])
+        def order(s):
+            prev, nxt = teams_by_year.get(s["y"] - 1, set()), teams_by_year.get(s["y"] + 1, set())
+            return (s["y"], 0 if s["team"] in prev else 2 if s["team"] in nxt else 1, s["team"])
+        self.seasons = sorted(raw["seasons"], key=order)
         self.awards = raw["awards"]
         self.salary = raw["salary"]
         self.bio = raw["bio"]
@@ -240,11 +272,18 @@ class Player:
         return {s["team"] for s in self.seasons}
 
     @property
+    def ok(self):
+        """Usable in the quiz: has a headshot, and is modern (2000-01 on) and known, or a true legend."""
+        if not self.img:
+            return False
+        return self.name in LEGENDS or ((self.last or 0) >= 2001 and self.fame >= 4)
+
+    @property
     def difficulty(self):
         levels = ["easy", "medium", "hard"]
-        i = 0 if self.fame >= 30 else 1 if self.fame >= 12 else 2
+        i = 0 if self.fame >= 25 else 1 if self.fame >= 9 else 2
         # a TikTok crowd skews young: pre-1995 careers are a level harder unless the player is an icon
-        if (self.last or 0) < 1995 and self.fame < 60:
+        if (self.last or 0) < 1995 and self.fame < 95:
             i = min(2, i + 1)
         return levels[i]
 
@@ -315,6 +354,10 @@ def pick_others(rnd, pool, n, exclude):
 def mc(bank, theme, diff, prompt, correct, wrong, fact=None, image=None, sub=None):
     if len(wrong) < 3 or correct in wrong:
         return
+    # when the answer is a player, he has to be quiz-eligible (modern or legend, with a photo)
+    ans = players_by_key_all.get(norm(correct))
+    if ans is not None and not ans.ok:
+        return
     opts = wrong[:3] + [correct]
     bank.rnd.shuffle(opts)
     q = {"type": "mc", "theme": theme, "difficulty": diff, "prompt": prompt,
@@ -335,8 +378,11 @@ def guess(bank, theme, diff, prompt, p, clues, players, fact=None, image=None, i
         q["revealImage"] = p.img          # headshot shown only on the answer screen
     bank.add(q)
 
+def okp(p):
+    return p is not None and p.ok
+
 def hl(bank, theme, diff, prompt, a, av, b, bv, fmt, fact=None, lower_wins=False):
-    if av == bv:
+    if av == bv or not (okp(a) and okp(b)):
         return
     win = (0 if av < bv else 1) if lower_wins else (0 if av > bv else 1)
     q = {"type": "hl", "theme": theme, "difficulty": diff, "prompt": prompt,
@@ -347,6 +393,11 @@ def hl(bank, theme, diff, prompt, a, av, b, bv, fmt, fact=None, lower_wins=False
 
 def board(bank, theme, diff, prompt, rows, players_by_key, fact=None, seconds=75):
     slots = []
+    # board answers must be modern (2000-01 on) or legends; a missing photo is fine here (no circle is drawn)
+    def era_ok(p):
+        return p is not None and (p.name in LEGENDS or (p.last or 0) >= 2001)
+    if not all(era_ok(players_by_key_all.get(norm(n))) for _, n in rows):
+        return
     for label, name in rows:
         p = players_by_key_all.get(norm(name))
         acc = accept_names(p, players_by_key_all) if p else [norm(name)]
@@ -357,6 +408,8 @@ def board(bank, theme, diff, prompt, rows, players_by_key, fact=None, seconds=75
     bank.add(q)
 
 def closest(bank, theme, diff, prompt, value, unit_fmt, fact=None, sub=None, p=None):
+    if p is not None and not okp(p):
+        return
     q = {"type": "closest", "theme": theme, "difficulty": diff, "prompt": prompt, "value": value,
          "answer": unit_fmt(value)}
     if sub: q["sub"] = sub
@@ -376,7 +429,7 @@ def gen_career_paths(bank, PL, famous):
         if len(clues) > 9:
             continue
         guess(bank, "Career Paths", p.difficulty, "Whose NBA career path is this?", p, clues, PL,
-              fact=f"{p.name}: {len(path)} stops, {num(p.tot['PTS'])} career points")
+              fact=f"{len(path)} NBA stops, {num(p.tot['PTS'])} career points")
         # never played for
         played = {t for t, _, _ in path}
         cur = sorted({team_name(c, 2026) for c in NBA30} - played)
@@ -419,7 +472,7 @@ def gen_season_lines(bank, PL, famous):
 def gen_bio(bank, PL, famous):
     for p in famous:
         b = p.bio
-        if not b or ((p.first or 0) < 1980 and p.fame < 50):
+        if not b:
             continue
         clues = []
         place = ", ".join(x for x in [b.get("BIRTH CITY", "").strip(), b.get("BIRTH STATE / COUNTRY", "").strip()] if x)
@@ -443,7 +496,8 @@ def gen_bio(bank, PL, famous):
 
 def gen_draft_mc(bank, PL, famous):
     drafted = [p for p in famous if to_int(p.bio.get("DRAFT")) and to_int(p.bio.get("PICK")) and p.bio.get("TEAM", "").strip()]
-    colleges = sorted({p.bio["COLLEGE / TEAM"].strip() for p in PL.values() if p.bio and p.bio.get("COLLEGE / TEAM", "").strip() and p.fame >= 2})
+    colleges = sorted({p.bio["COLLEGE / TEAM"].strip() for p in PL.values() if p.bio and p.bio.get("COLLEGE / TEAM", "").strip() and p.fame >= 2
+                       and p.bio["COLLEGE / TEAM"].strip().lower() not in ("no college", "none", "-")})
     for p in drafted:
         dy, pk, tm = to_int(p.bio["DRAFT"]), to_int(p.bio["PICK"]), p.bio["TEAM"].strip()
         tn = team_name(tm, dy + 1)
@@ -460,7 +514,7 @@ def gen_draft_mc(bank, PL, famous):
         mc(bank, "Draft & Bio", "medium" if p.difficulty == "easy" else "hard",
            f"Where was {p.name} picked in the {dy} draft?", f"No. {pk}", wrong, fact=f"Drafted by the {tn}")
         col = p.bio.get("COLLEGE / TEAM", "").strip()
-        if col and col.lower() not in ("none",):
+        if col and col.lower() not in ("none", "no college", "-"):
             mc(bank, "Draft & Bio", p.difficulty, f"Where did {p.name} play before the NBA?", col,
                pick_others(bank.rnd, colleges, 3, {col}))
 
@@ -502,14 +556,16 @@ def gen_awards(bank, PL, famous):
         if a not in ("Most Valuable Player", "Finals MVP", "Defensive Player of the Year", "Rookie of the Year",
                      "Sixth Man of the Year", "Most Improved Player", "Scoring Leader", "All-Star MVP"):
             continue
-        if len(ps) != 1 or y < 1970:
+        if len(ps) != 1:
             continue
         w = ps[0]
-        pool = [q.name for q in (allstars_by_year.get(y) or []) if q.name != w.name]
+        if not w.ok or (y < 2001 and w.name not in LEGENDS):
+            continue
+        pool = [q.name for q in (allstars_by_year.get(y) or []) if q.name != w.name and q.ok]
         if a in ("Rookie of the Year",):
-            pool = [q.name for q in PL.values() if q.first == y and q.fame >= 4 and q.name != w.name]
+            pool = [q.name for q in PL.values() if q.first == y and q.ok and q.name != w.name]
         if a in ("Sixth Man of the Year", "Most Improved Player"):
-            pool = [q.name for q in PL.values() if any(s["y"] == y for s in q.seasons) and 6 <= q.fame and q.name != w.name]
+            pool = [q.name for q in PL.values() if any(s["y"] == y for s in q.seasons) and q.ok and q.name != w.name]
         diff = "easy" if a in ("Most Valuable Player",) and w.fame >= 30 else ("medium" if w.fame >= 12 else "hard")
         label = {"Scoring Leader": "the scoring title"}.get(a, a)
         mc(bank, "Awards & Rings", diff, f"Who won {label} in {season(y)}?", w.name,
@@ -519,7 +575,7 @@ def gen_awards(bank, PL, famous):
                   [f"{a}, {season(y)}", f"Team that season: {next((t for aa, yy, t in w.awards if aa == a and yy == y), '')}",
                    f"Career: {w.allstar}x All-Star", f"Rings: {w.rings}"], PL)
     # boards: MVP by decade
-    for start in (1980, 1990, 2000, 2010, 2016):
+    for start in (2000, 2010, 2015):
         rows = []
         for y in range(start + 1, start + 11):
             ws = winners.get(("Most Valuable Player", y)) or []
@@ -527,7 +583,7 @@ def gen_awards(bank, PL, famous):
                 rows.append((season(y), ws[0].name))
         if len(rows) == 10:
             board(bank, "Awards & Rings", "medium", f"Name every MVP from {rows[0][0]} to {rows[-1][0]}", rows, PL, seconds=90)
-    for start in (1990, 2000, 2010, 2016):
+    for start in (2000, 2010, 2015):
         rows = []
         for y in range(start + 1, start + 11):
             ws = winners.get(("Finals MVP", y)) or []
@@ -562,6 +618,11 @@ def gen_leaders(bank, PL, P):
             board(bank, "Record Book", "easy" if n == 5 else "medium",
                   f"Name the top {n} in career {word} (regular season)",
                   [(num(r["total"]), r["name"]) for r in rows[:n]], PL, seconds=60 if n == 5 else 90)
+        active = [r for r in rows if (players_by_key_all.get(norm(r["name"])) or None) is not None
+                  and players_by_key_all[norm(r["name"])].active][:8]
+        if len(active) >= 5:
+            board(bank, "Record Book", "medium", f"Name the top 5 active players in career {word}",
+                  [(num(r["total"]), r["name"]) for r in active[:5]], PL, seconds=60)
         top = [r for r in rows[:120]]
         for _ in range(70):
             a, b = bank.rnd.sample(top, 2)
@@ -577,7 +638,7 @@ def gen_leaders(bank, PL, P):
         # rank MC
         for r in rows[:25]:
             p = players_by_key_all.get(norm(r["name"]))
-            if not p:
+            if not okp(p):
                 continue
             others = [x["name"] for x in rows[:40] if x["name"] != r["name"]]
             if r["rank"] <= 10:
@@ -592,6 +653,8 @@ def gen_feats(bank, PL, P):
     nice = {"td": "triple-doubles", "p50": "50-point games", "p40": "40-point games", "p60": "60-point games",
             "r20": "20-rebound games", "a20": "20-assist games", "f5x5": "5x5 games"}
     for code, rows in F.items():
+        if code not in nice or code == "f5x5":   # 5x5 games: too obscure for a live crowd
+            continue
         word = nice.get(code, labels.get(code, code))
         def nm(slug):
             return (names.get(slug) or [slug])[0]
@@ -618,7 +681,7 @@ def gen_money(bank, PL, famous):
             by_year[y].append((v, p))
     for y, rows in by_year.items():
         rows.sort(key=lambda x: -x[0])
-        if len(rows) < 30:
+        if len(rows) < 30 or y < 2001:
             continue
         top = rows[:10]
         mc(bank, "Money Talks", "medium", f"Who was the highest-paid player in {season(y)}?", top[0][1].name,
@@ -626,7 +689,7 @@ def gen_money(bank, PL, famous):
         board(bank, "Money Talks", "hard", f"Name the top 5 highest-paid players of {season(y)}",
               [(money(v), p.name) for v, p in top[:5]], PL, seconds=75)
         # higher/lower within a season among well-known names
-        pool = [(v, p) for v, p in rows[:80] if p.fame >= 9]
+        pool = [(v, p) for v, p in rows[:80] if p.ok and p.fame >= 6]
         for _ in range(12):
             if len(pool) < 2:
                 break
@@ -634,7 +697,7 @@ def gen_money(bank, PL, famous):
             if abs(av - bv) / max(av, bv) > 0.04:
                 hl(bank, "Money Talks", "medium", f"Who earned more in {season(y)}?", a, av, b, bv, money)
     # career earnings
-    earners = sorted(((sum(p.salary.values()), p) for p in paid if p.fame >= 10), key=lambda x: -x[0])
+    earners = sorted(((sum(p.salary.values()), p) for p in paid if p.ok and p.fame >= 8), key=lambda x: -x[0])
     board(bank, "Money Talks", "medium", "Name the top 8 in career NBA salary earnings",
           [(money(v), p.name) for v, p in earners[:8]], PL, seconds=90,
           fact="Salaries since 1990-91")
@@ -693,12 +756,12 @@ def gen_no1_picks(bank, PL):
     for p in PL.values():
         if to_int(p.bio.get("PICK")) == 1 and to_int(p.bio.get("DRAFT")):
             by.setdefault(to_int(p.bio["DRAFT"]), []).append(p)
-    for start in (1990, 2000, 2010, 2015):
+    for start in (2000, 2010, 2015):
         rows = [(str(y), by[y][0].name) for y in range(start, start + 10) if len(by.get(y, [])) == 1]
         if len(rows) >= 8:
             board(bank, "Draft & Bio", "medium", f"Name every No. 1 pick from {rows[0][0]} to {rows[-1][0]}", rows, PL, seconds=90)
     for y, ps in by.items():
-        if len(ps) == 1 and y >= 1980:
+        if len(ps) == 1 and y >= 2000:
             p = ps[0]
             pool = [q.name for q in PL.values() if to_int(q.bio.get("DRAFT")) == y and 2 <= (to_int(q.bio.get("PICK")) or 99) <= 10]
             mc(bank, "Draft & Bio", "medium" if p.fame >= 12 else "hard", f"Who was the No. 1 pick in the {y} draft?",
@@ -715,13 +778,13 @@ def gen_franchise(bank, PL):
     tot = collections.defaultdict(collections.Counter)
     for p in PL.values():
         for s in p.seasons:
-            if s["team"] in NBA30:
+            if s["team"] in NBA30 and s["y"] >= 2001:
                 tot[s["team"]][p.name] += s["PTS"]
     for code, c in tot.items():
         top = c.most_common(6)
-        board(bank, "Franchise Legends", "medium", f"Name the {NICK[code]}' top 6 scorers in franchise history",
-              [(num(v), n) for n, v in top], PL, seconds=80, fact="Regular season, includes the franchise's earlier cities")
-        mc(bank, "Franchise Legends", "medium", f"Who is the {NICK[code]}' all-time leading scorer?", top[0][0],
+        board(bank, "Franchise Legends", "medium", f"Name the {NICK[code]}' top 6 scorers since 2000-01",
+              [(num(v), n) for n, v in top], PL, seconds=80, fact="Regular season points with the franchise since 2000-01")
+        mc(bank, "Franchise Legends", "medium", f"Who has scored the most points for the {NICK[code]} since 2000-01?", top[0][0],
            [n for n, _ in top[1:4]], fact=f"{num(top[0][1])} points")
 
 def gen_battles(bank, PL, famous):
@@ -777,8 +840,7 @@ def main():
     PL = build_players(P)
     players_by_key_all.update({p.key: p for p in PL.values()})
     # live audiences want names they know: big careers of any era, or solid players from 1995 on
-    famous = sorted([p for p in PL.values() if p.fame >= 14 or (p.fame >= 7 and (p.last or 0) >= 1996)],
-                    key=lambda p: -p.fame)
+    famous = sorted([p for p in PL.values() if p.ok], key=lambda p: -p.fame)
 
     bank = Bank()
     gen_career_paths(bank, PL, famous)

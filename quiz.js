@@ -1,4 +1,4 @@
-/* HoopsHype NBA Quiz Live: game engine.
+/* HoopsHype NBA Quiz Live: game engine and screen.
    Events (chat, gifts, likes, follows, shares) arrive from the local bridge (bridge/quiz-bridge.mjs)
    over /events, or from the built-in practice simulator when the page is opened with ?practice=1.
 
@@ -10,20 +10,20 @@
 // ------------------------------------------------------------------ config
 const DEFAULTS = {
   imgBase: 'https://jsierrahoopshype.github.io/nba-headshots/players/headshots/face-fill-320/',
+  questionsUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/hoopshype-quiz-live/HEAD/data/questions.json',
   questionsPerGame: 8,
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
-  times: { guess: 45, mc: 20, tf: 14, hl: 15, battle: 18, board: 75, closest: 25, reveal: 7, intro: 5, recap: 9, voteResult: 5 },
+  times: { guess: 45, mc: 20, tf: 14, hl: 15, battle: 18, board: 75, closest: 25, reveal: 8, intro: 7, recap: 10, voteResult: 6 },
   blitzTimes: { guess: 25, mc: 10, tf: 8, hl: 8, battle: 10, board: 40, closest: 14 },
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
-  afterFirstCorrect: 8,                // seconds left once somebody nails a letter-reveal question
+  afterFirstCorrect: 8,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
-  // The 4 theme-vote tiles. Each tile is tied to one gift; every coin of that gift is one vote.
+  // The 4 theme-vote columns. Each is tied to one gift; every coin of that gift is one vote.
   // Names must match TikTok's gift names exactly. The bridge window prints every gift name it sees.
   themeGifts: ['Rose', 'Ice Cream Cone', 'GG', 'Finger Heart'],
   powerups: { hint: 30, double: 99, blitz: 199 },   // coin thresholds for any other gift
   blitzLength: 3,
   diffMix: { easy: 0.5, medium: 0.4, hard: 0.1 },
-  questionsUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/hoopshype-quiz-live/HEAD/data/questions.json',
 };
 let CFG = DEFAULTS;
 const params = new URLSearchParams(location.search);
@@ -31,7 +31,6 @@ const PRACTICE = params.has('practice');
 
 // ------------------------------------------------------------------ utils
 const $ = s => document.querySelector(s);
-const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const now = () => Date.now();
 const rnd = a => a[Math.floor(Math.random() * a.length)];
@@ -68,7 +67,7 @@ function acceptFor(name) {
   return acc;
 }
 function parseNumber(text, q) {
-  let s = String(text).toLowerCase().replace(/\s/g, '');
+  const s = String(text).toLowerCase().replace(/\s/g, '');
   const m = s.match(/\$?(\d[\d.,]*)(k|m|million|millones)?/);
   if (!m) return null;
   let raw = m[1];
@@ -83,7 +82,8 @@ function parseNumber(text, q) {
   if (inMillions && v >= 100000) v = v / 1e6;
   return v;
 }
-const img = f => f ? `<img src="${CFG.imgBase}${encodeURIComponent(f)}" alt="" onerror="this.style.visibility='hidden'">` : '';
+// Photo only when one exists: never an empty circle. A photo that fails to load removes its own frame.
+const photo = (f, cls = '') => f ? `<div class="photo ${cls}"><img src="${CFG.imgBase}${encodeURIComponent(f)}" alt="" onerror="this.parentNode.remove()"></div>` : '';
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
 
 // ------------------------------------------------------------------ sound (simple WebAudio blips, no files)
@@ -109,22 +109,22 @@ const sfx = {
 const S = {
   data: null, themes: [], used: new Set(store('hhq_used') || []),
   game: 0, theme: null, queue: [], qi: 0, q: null, phase: 'boot',
-  tStart: 0, tEnd: 0, paused: false, pausedLeft: 0,
-  answered: new Map(), correct: [], firstCorrectAt: 0, closest: new Map(), filled: [],
+  tStart: 0, tEnd: 0, dur: 1, paused: false, pausedLeft: 0,
+  answered: new Map(), correct: [], closest: new Map(), filled: [], battleVotes: [0, 0],
   gameScores: new Map(), streamScores: new Map(), gifters: new Map(store('hhq_gifters') || []),
   names: new Map(), streaks: new Map(),
   voteThemes: [], votes: [0, 0, 0, 0],
-  mult: 1, multBy: null, blitzLeft: 0, blitzQueued: 0,
+  mult: 1, multBy: null, qMult: 1, blitzLeft: 0, blitzQueued: 0,
   likes: 0, likeGoal: DEFAULTS.likeGoal, likeBase: 0,
-  revealPlan: null, struck: new Set(), stats: null, connected: false,
+  revealPlan: null, struck: new Set(), stats: null, connected: false, statusText: '',
 };
-
-function displayName(u) { return S.names.get(u) || u; }
+const displayName = u => S.names.get(u) || u;
 function addPoints(u, pts) {
   if (!pts) return;
   S.gameScores.set(u, (S.gameScores.get(u) || 0) + pts);
   S.streamScores.set(u, (S.streamScores.get(u) || 0) + pts);
 }
+const isTF = q => q.type === 'mc' && q.options.length === 2 && q.options[0] === 'True';
 
 // ------------------------------------------------------------------ question picking
 function pickQueue(theme) {
@@ -154,25 +154,23 @@ function pickQueue(theme) {
   if (battles.length && out.length > CFG.battleSlot) out.splice(CFG.battleSlot, 0, battles[0]);
   return out;
 }
-function markUsed(q) {
-  S.used.add(q.id);
-  const arr = [...S.used]; store('hhq_used', arr.slice(-4000));
-}
+function markUsed(q) { S.used.add(q.id); store('hhq_used', [...S.used].slice(-4000)); }
 function rollVoteThemes() {
-  const options = S.themes.filter(t => t !== S.theme);
-  S.voteThemes = shuffle(options).slice(0, 3).concat(Math.random() < 0.5 ? ['Mixed'] : [shuffle(options)[3] || 'Mixed']);
+  const options = shuffle(S.themes.filter(t => t !== S.theme));
+  S.voteThemes = options.slice(0, 3).concat(S.theme === 'Mixed' ? [options[3]] : ['Mixed']);
   S.votes = [0, 0, 0, 0];
   renderVote();
 }
 
 // ------------------------------------------------------------------ game flow
+function setPhase(p, secs) { S.phase = p; S.tStart = now(); S.dur = secs * 1000; S.tEnd = S.tStart + S.dur; S._lastTick = null; }
 function startGame(theme) {
   S.game += 1;
   S.theme = theme;
   S.queue = pickQueue(theme);
-  S.qi = 0;
+  S.qi = 0; S.q = null;
   S.gameScores = new Map();
-  S.stats = { answers: 0, players: new Set(), fastest: null, hardest: null, easiest: null, coins: 0 };
+  S.stats = { answers: 0, players: new Set(), fastest: null, coins: 0 };
   rollVoteThemes();
   setPhase('intro', CFG.times.intro);
   renderIntro();
@@ -180,14 +178,14 @@ function startGame(theme) {
 function nextQuestion() {
   if (S.qi >= S.queue.length) return endGame();
   const q = S.queue[S.qi];
-  S.q = q; S.answered = new Map(); S.correct = []; S.firstCorrectAt = 0; S.closest = new Map(); S.struck = new Set();
+  S.q = q; S.answered = new Map(); S.correct = []; S.closest = new Map(); S.struck = new Set();
   S.filled = q.slots ? q.slots.map(() => null) : [];
   S.battleVotes = [0, 0];
-  if (S.blitzQueued && !S.blitzLeft) { S.blitzLeft = S.blitzQueued; S.blitzQueued = 0; addAlert('BLITZ ROUND: double points, half the time'); }
-  const isBlitz = S.blitzLeft > 0;
-  const tType = q.type === 'mc' && q.options.length === 2 ? 'tf' : q.type;
-  const secs = (isBlitz ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 20;
-  S.qMult = (isBlitz ? 2 : 1) * S.mult;
+  if (S.blitzQueued && !S.blitzLeft) { S.blitzLeft = S.blitzQueued; S.blitzQueued = 0; addAlert('<b>BLITZ ROUND</b>: double points, half the time'); }
+  const blitz = S.blitzLeft > 0;
+  const tType = isTF(q) ? 'tf' : q.type;
+  const secs = (blitz ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 20;
+  S.qMult = (blitz ? 2 : 1) * S.mult;
   setPhase('question', secs);
   planReveals(q, secs);
   renderQuestion();
@@ -199,47 +197,33 @@ function endQuestion() {
   if (q.type === 'mc' || q.type === 'hl') scoreChoice(q);
   if (q.type === 'closest') scoreClosest(q);
   if (q.type === 'battle') scoreBattle(q);
-  // recap stats
-  const n = q.type === 'board' ? S.filled.filter(Boolean).length : S.correct.length;
-  if (q.type !== 'battle' && q.type !== 'closest') {
-    if (!S.stats.hardest || n < S.stats.hardest.n) S.stats.hardest = { n, a: shortAnswer(q) };
-    if (!S.stats.easiest || n > S.stats.easiest.n) S.stats.easiest = { n, a: shortAnswer(q) };
-  }
   if (S.blitzLeft > 0) S.blitzLeft -= 1;
   if (S.mult > 1) { S.mult = 1; S.multBy = null; }
   setPhase('reveal', CFG.times.reveal);
   sfx.reveal();
   renderReveal();
-  S.qi += 1;
 }
-function endGame() {
-  setPhase('recap', CFG.times.recap);
-  renderRecap();
-}
+function endGame() { setPhase('recap', CFG.times.recap); renderRecap(); }
 function afterRecap() {
-  // theme vote result
   let best = -1, idx = 0;
   S.votes.forEach((v, i) => { if (v > best) { best = v; idx = i; } });
-  const winner = best > 0 ? S.voteThemes[idx] : rnd(S.voteThemes);
-  S.nextTheme = winner;
+  S.nextTheme = best > 0 ? S.voteThemes[idx] : rnd(S.voteThemes);
   setPhase('voteResult', CFG.times.voteResult);
-  renderVoteResult(winner, best);
-}
-function setPhase(p, secs) {
-  S.phase = p; S.tStart = now(); S.tEnd = now() + secs * 1000; S.dur = secs * 1000;
+  renderVoteResult(S.nextTheme, best);
 }
 function tick() {
   if (S.paused || !S.data) return;
   const left = S.tEnd - now();
-  updateTimer(left);
+  updateClock(left);
   if (S.phase === 'question') {
     progressiveReveal();
-    if (left <= 5000 && left > 0 && Math.ceil(left / 1000) !== S._lastTick) { S._lastTick = Math.ceil(left / 1000); sfx.tick(); }
+    const sec = Math.ceil(left / 1000);
+    if (left <= 5000 && left > 0 && sec !== S._lastTick) { S._lastTick = sec; sfx.tick(); }
   }
   if (left > 0) return;
   if (S.phase === 'intro') nextQuestion();
   else if (S.phase === 'question') endQuestion();
-  else if (S.phase === 'reveal') nextQuestion();
+  else if (S.phase === 'reveal') { S.qi += 1; nextQuestion(); }
   else if (S.phase === 'recap') afterRecap();
   else if (S.phase === 'voteResult') startGame(S.nextTheme);
 }
@@ -250,17 +234,15 @@ function planReveals(q, secs) {
   if (q.type !== 'guess') return;
   const letters = [];
   [...q.answer].forEach((c, i) => { if (/[a-z0-9]/i.test(c)) letters.push(i); });
-  const maxLetters = Math.floor(letters.length * 0.45);
-  const order = shuffle(letters.slice()).slice(0, maxLetters);
+  const order = shuffle(letters.slice()).slice(0, Math.floor(letters.length * 0.45));
   const startClues = q.clues.length >= 4 ? 2 : 1;
-  const extraClues = q.clues.length - startClues;
+  const extra = q.clues.length - startClues;
   const T = secs * 1000;
   S.revealPlan = {
     shownLetters: new Set(),
     letterTimes: order.map((idx, i) => ({ idx, at: T * (0.2 + 0.75 * (i + 1) / (order.length + 1)) })),
-    clueTimes: Array.from({ length: extraClues }, (_, i) => T * (0.08 + 0.6 * (i + 1) / (extraClues + 1))),
-    shownClues: startClues, total: letters.length,
-    zoom: q.imageMode === 'zoom',
+    clueTimes: Array.from({ length: extra }, (_, i) => T * (0.08 + 0.6 * (i + 1) / (extra + 1))),
+    shownClues: startClues, total: letters.length, zoom: q.imageMode === 'zoom',
   };
 }
 function progressiveReveal() {
@@ -270,9 +252,9 @@ function progressiveReveal() {
   let changed = false;
   while (P.clueTimes.length && t >= P.clueTimes[0]) { P.clueTimes.shift(); P.shownClues++; changed = true; }
   while (P.letterTimes.length && t >= P.letterTimes[0].at) { P.shownLetters.add(P.letterTimes.shift().idx); changed = true; }
-  if (changed) renderGuessBody();
+  if (changed) renderGuess();
   if (P.zoom) {
-    const i = $('.face-wrap img');
+    const i = $('.zoombox img');
     if (i) i.style.transform = `scale(${(3.4 - 2.4 * Math.min(1, t / (S.dur * 0.85))).toFixed(3)})`;
   }
 }
@@ -283,22 +265,25 @@ function hintNow(by) {
     const P = S.revealPlan;
     if (P.clueTimes.length) { P.clueTimes.shift(); P.shownClues++; }
     if (P.letterTimes.length) P.shownLetters.add(P.letterTimes.shift().idx);
-    renderGuessBody();
+    renderGuess();
+    addAlert(`<b>${esc(by)}</b> unlocked a hint for everyone`);
   } else if (q.type === 'mc' && q.options.length > 2) {
     const wrong = q.options.map((_, i) => i).filter(i => i !== q.correct && !S.struck.has(i));
-    if (wrong.length > 1) { S.struck.add(rnd(wrong)); renderQuestion(); }
+    if (wrong.length > 1) { S.struck.add(rnd(wrong)); renderQuestion(true); }
+    addAlert(`<b>${esc(by)}</b> knocked out a wrong answer`);
   } else if (q.type === 'board') {
     const open = S.filled.map((f, i) => f ? null : i).filter(i => i != null);
-    if (open.length) { const i = rnd(open); S.filled[i] = { u: null, hint: true }; renderQuestion(); }
+    if (open.length) { S.filled[rnd(open)] = { u: null, hint: true }; renderQuestion(true); }
+    addAlert(`<b>${esc(by)}</b> revealed a name on the board`);
   } else {
     S.tEnd += 8000; S.dur += 8000;
+    addAlert(`<b>${esc(by)}</b> added 8 seconds`);
   }
-  addAlert(`HINT DROP from ${esc(by)}`);
 }
 
 // ------------------------------------------------------------------ answers
 function onChat(u, text) {
-  S.stats && S.stats.players.add(u);
+  if (S.stats) S.stats.players.add(u);
   const q = S.q;
   if (S.phase !== 'question' || !q || S.paused) return;
   if (q.type === 'guess') return answerGuess(q, u, text);
@@ -309,14 +294,13 @@ function onChat(u, text) {
 }
 function choiceIndex(q, text) {
   const t = norm(text);
-  if (q.options.length === 2 && q.options[0] === 'True') {
-    if (['true', 't', 'yes', 'si', 'v', 'verdadero', 'a', '1'].includes(t)) return 0;
-    if (['false', 'f', 'no', 'falso', 'b', '2'].includes(t)) return 1;
+  if (isTF(q)) {
+    if (['true', 't', 'yes', 'si', 'v', 'verdadero'].includes(t)) return 0;
+    if (['false', 'f', 'no', 'falso'].includes(t)) return 1;
     return null;
   }
-  const letters = { a: 0, b: 1, c: 2, d: 3, '1': 0, '2': 1, '3': 2, '4': 3 };
   const m = t.match(/^(?:option )?([abcd1-4])$/);
-  if (m) return letters[m[1]];
+  if (m) return { a: 0, b: 1, c: 2, d: 3, '1': 0, '2': 1, '3': 2, '4': 3 }[m[1]];
   for (let i = 0; i < q.options.length; i++) {
     const o = norm(q.options[i]);
     if (t === o || (/[a-z]/.test(o) && nameMatch(text, acceptFor(q.options[i])))) return i;
@@ -325,25 +309,19 @@ function choiceIndex(q, text) {
 }
 function sideIndex(q, text) {
   const t = norm(text);
-  if (['a', '1', 'left'].includes(t)) return 0;
-  if (['b', '2', 'right'].includes(t)) return 1;
+  if (['a', '1'].includes(t)) return 0;
+  if (['b', '2'].includes(t)) return 1;
   for (let i = 0; i < 2; i++) if (nameMatch(text, acceptFor(q.sides[i].name))) return i;
   return null;
 }
-function basePoints(q) { return (CFG.points[q.difficulty] || 60) * (S.qMult || 1); }
+const basePoints = q => (CFG.points[q.difficulty] || 60) * (S.qMult || 1);
 function answerGuess(q, u, text) {
-  if (S.correct.some(c => c.u === u)) return;
-  if (!nameMatch(text, q.accept)) return;
+  if (S.correct.some(c => c.u === u) || !nameMatch(text, q.accept)) return;
   const P = S.revealPlan;
   const frac = P && P.total ? P.shownLetters.size / P.total : 0;
   const rank = S.correct.length;
-  const pts = Math.round(basePoints(q) * (1 - 0.5 * frac)) + (CFG.points.rank[rank] || 0) * (S.qMult || 1);
-  registerCorrect(u, pts);
-  if (rank === 0) {
-    S.firstCorrectAt = now();
-    const cap = now() + CFG.afterFirstCorrect * 1000;
-    if (S.tEnd > cap) { S.tEnd = cap; }
-  }
+  registerCorrect(u, Math.round(basePoints(q) * (1 - 0.5 * frac)) + (CFG.points.rank[rank] || 0) * (S.qMult || 1));
+  if (rank === 0) S.tEnd = Math.min(S.tEnd, now() + CFG.afterFirstCorrect * 1000);
 }
 function answerChoice(q, u, idx) {
   if (idx == null || S.answered.has(u)) return;      // first answer counts: no spamming every option
@@ -351,27 +329,23 @@ function answerChoice(q, u, idx) {
   S.answered.set(u, { idx, at: now() });
   S.stats.answers++;
   if (q.type === 'battle') S.battleVotes[idx]++;
-  renderLiveCounts();
+  renderLive();
 }
 function scoreChoice(q) {
   const right = [...S.answered.entries()].filter(([, a]) => a.idx === q.correct).sort((a, b) => a[1].at - b[1].at);
   right.forEach(([u], rank) => registerCorrect(u, basePoints(q) + (CFG.points.rank[rank] || 0) * (S.qMult || 1), true));
-  // wrong answers break streaks
   [...S.answered.entries()].filter(([, a]) => a.idx !== q.correct).forEach(([u]) => S.streaks.set(u, 0));
 }
-function scoreBattle(q) {
-  const win = S.battleVotes[0] === S.battleVotes[1] ? -1 : (S.battleVotes[0] > S.battleVotes[1] ? 0 : 1);
-  S.battleWin = win;
-  if (win < 0) return;
-  [...S.answered.entries()].filter(([, a]) => a.idx === win).forEach(([u]) => { addPoints(u, CFG.points.battle * (S.qMult || 1)); S.correct.push({ u, pts: CFG.points.battle }); });
+function scoreBattle() {
+  const [a, b] = S.battleVotes;
+  S.battleWin = a === b ? -1 : (a > b ? 0 : 1);
+  if (S.battleWin < 0) return;
+  const pts = CFG.points.battle * (S.qMult || 1);
+  [...S.answered.entries()].filter(([, x]) => x.idx === S.battleWin).forEach(([u]) => { addPoints(u, pts); S.correct.push({ u, pts }); });
 }
 function answerBoard(q, u, text) {
   let hit = false;
-  q.slots.forEach((s, i) => {
-    if (S.filled[i] && S.filled[i].u !== null) return;
-    if (S.filled[i] && S.filled[i].hint) return;
-    if (nameMatch(text, s.accept)) { S.filled[i] = { u }; hit = true; }
-  });
+  q.slots.forEach((s, i) => { if (!S.filled[i] && nameMatch(text, s.accept)) { S.filled[i] = { u }; hit = true; } });
   if (!hit) return;
   const pts = CFG.points.board * (S.qMult || 1);
   addPoints(u, pts);
@@ -379,8 +353,9 @@ function answerBoard(q, u, text) {
   if (prev) prev.pts += pts; else S.correct.push({ u, pts });
   S.stats.answers++;
   sfx.correct();
-  pushTicker(u, pts, S.correct.length === 1);
-  renderQuestion();
+  setEvent(`<b>${esc(displayName(u))}</b> found one, +${pts}`);
+  renderQuestion(true);
+  renderBoards();
   if (S.filled.every(Boolean)) S.tEnd = Math.min(S.tEnd, now() + 2500);
 }
 function answerClosest(q, u, text) {
@@ -388,16 +363,16 @@ function answerClosest(q, u, text) {
   if (v == null) return;
   if (!S.closest.has(u)) S.stats.answers++;
   S.closest.set(u, { v, at: now() });
-  renderLiveCounts();
+  renderLive();
 }
 function scoreClosest(q) {
   const rows = [...S.closest.entries()].map(([u, a]) => ({ u, v: a.v, d: Math.abs(a.v - q.value), at: a.at }))
-    .sort((a, b) => a.d - b.d || a.at - b.at);
-  S.closestRows = rows.slice(0, 3);
-  rows.slice(0, 3).forEach((r, i) => {
-    const pts = (r.d === 0 ? CFG.points.exact : CFG.points.closest[i]) * (S.qMult || 1);
-    addPoints(r.u, pts); r.pts = pts; S.correct.push({ u: r.u, pts });
+    .sort((a, b) => a.d - b.d || a.at - b.at).slice(0, 3);
+  rows.forEach((r, i) => {
+    r.pts = (r.d === 0 ? CFG.points.exact : CFG.points.closest[i]) * (S.qMult || 1);
+    addPoints(r.u, r.pts); S.correct.push({ u: r.u, pts: r.pts });
   });
+  S.closestRows = rows;
 }
 function registerCorrect(u, pts, quiet) {
   addPoints(u, pts);
@@ -405,14 +380,12 @@ function registerCorrect(u, pts, quiet) {
   S.correct.push({ u, pts, at: now() });
   if (!quiet) S.stats.answers++;
   if (S.correct.length === 1) {
-    const secs = ((now() - S.tStart) / 1000);
+    const secs = (now() - S.tStart) / 1000;
     if (!S.stats.fastest || secs < S.stats.fastest.s) S.stats.fastest = { u, s: secs };
-    if (!quiet) sfx.correct();
-  }
-  if (!quiet) pushTicker(u, pts, S.correct.length === 1);
+    if (!quiet) { sfx.correct(); setEvent(`<b>${esc(displayName(u))}</b> got it first, +${pts}. Still time to answer`); }
+  } else if (!quiet) setEvent(`<b>${esc(displayName(u))}</b> got it too, +${pts}. ${S.correct.length} correct so far`);
   renderBoards();
 }
-function shortAnswer(q) { return q.type === 'board' ? q.prompt : q.answer; }
 
 // ------------------------------------------------------------------ gifts, likes, social
 function onGift(ev) {
@@ -423,23 +396,24 @@ function onGift(ev) {
   if (S.stats) S.stats.coins += total;
   addPoints(u, total * CFG.points.perCoin);
   sfx.gift();
-  const tile = CFG.themeGifts.findIndex(g => norm(g) === norm(ev.gift));
-  if (tile >= 0 && S.voteThemes[tile]) {
-    S.votes[tile] += total;
+  const who = `<b>${esc(displayName(u))}</b>`;
+  const col = CFG.themeGifts.findIndex(g => norm(g) === norm(ev.gift));
+  if (col >= 0 && S.voteThemes[col]) {
+    S.votes[col] += total;
     renderVote();
-    addAlert(`${esc(displayName(u))} votes ${esc(S.voteThemes[tile])} +${total}`);
+    addAlert(`${who} voted ${esc(S.voteThemes[col])} (+${total})`);
   } else if (total >= CFG.powerups.blitz) {
     S.blitzQueued = CFG.blitzLength;
-    addAlert(`${esc(displayName(u))} called a BLITZ ROUND`);
+    addAlert(`${who} called a BLITZ ROUND`);
   } else if (total >= CFG.powerups.double) {
     S.mult = 2; S.multBy = displayName(u);
-    addAlert(`DOUBLE POINTS next question, thanks ${esc(displayName(u))}`);
+    addAlert(`${who} made the next question DOUBLE POINTS`);
   } else if (total >= CFG.powerups.hint) {
-    hintNow(displayName(u));
+    if (S.phase === 'question') hintNow(displayName(u)); else addAlert(`Thanks ${who} for the ${esc(ev.gift)}`);
   } else {
-    addAlert(`${esc(displayName(u))} sent ${esc(ev.gift)}${ev.count > 1 ? ' x' + ev.count : ''}`);
+    addAlert(`Thanks ${who} for the ${esc(ev.gift)}${ev.count > 1 ? ' x' + ev.count : ''}`);
   }
-  renderBoards(); renderHeader();
+  renderBoards(); renderThemebar();
 }
 function onLikes(n, total) {
   S.likes = total != null ? Math.max(S.likes, total) : S.likes + n;
@@ -447,14 +421,14 @@ function onLikes(n, total) {
     S.likeBase = S.likes;
     S.likeGoal = Math.round(S.likeGoal * CFG.likeGoalGrowth / 100) * 100;
     S.blitzQueued = CFG.blitzLength;
-    addAlert('LIKE GOAL HIT: BLITZ ROUND next, double points');
+    addAlert('<b>LIKE GOAL HIT</b>: blitz round coming, double points');
   }
   renderLikes();
 }
 function onSocial(kind, u) {
   const pts = kind === 'share' ? CFG.points.share : CFG.points.follow;
   addPoints(u, pts);
-  addAlert(`${esc(displayName(u))} ${kind === 'share' ? 'shared the LIVE' : 'followed'} +${pts}`);
+  addAlert(`<b>${esc(displayName(u))}</b> ${kind === 'share' ? 'shared the LIVE' : 'followed'}, +${pts} points`);
   renderBoards();
 }
 function onEvent(ev) {
@@ -468,258 +442,279 @@ function onEvent(ev) {
   }
 }
 
-// ------------------------------------------------------------------ rendering
-const inner = () => $('#card-inner');
-function renderHeader() {
-  const q = S.q;
-  const inQ = S.phase === 'question' && q;
-  $('#pts').textContent = inQ && q.type !== 'battle' ? `+${basePoints(q)} POINTS` : 'NBA TRIVIA';
-  const m = $('#mult');
-  if (inQ && S.qMult > 1) { m.textContent = `x${S.qMult}`; m.classList.remove('hidden'); } else m.classList.add('hidden');
-  const meta = $('#meta');
+// ------------------------------------------------------------------ screen: chrome
+const body = () => $('#panel-body');
+function renderThemebar() {
+  $('#gameno').textContent = S.game ? `GAME ${S.game}` : '';
+  let tag = '';
   if (S.phase === 'question' || S.phase === 'reveal') {
-    const qn = Math.min(S.qi + 1, S.queue.length);
-    meta.innerHTML = `<span>Game ${S.game}</span>·<span class="theme">${esc(S.theme)}</span>·<span>Question ${qn}/${S.queue.length}</span>` +
-      (q && q.type !== 'battle' ? `<span class="diff ${q.difficulty}">${q.difficulty.toUpperCase()}</span>` : '') +
-      (S.blitzLeft > 0 ? '<span class="blitz">BLITZ</span>' : '');
-  } else meta.innerHTML = `<span>Game ${S.game}</span>·<span class="theme">${esc(S.theme || '')}</span>`;
+    if (S.blitzLeft > 0) tag = '<span class="tag">BLITZ</span>';
+    else if (S.qMult > 1) tag = '<span class="tag">DOUBLE POINTS</span>';
+  }
+  $('#theme-name').innerHTML = esc(S.theme || '') + tag;
+  const pips = S.queue.map((q, i) => {
+    const st = S.phase === 'recap' || S.phase === 'voteResult' || i < S.qi ? 'done' : (i === S.qi && S.phase !== 'intro') ? 'now' : '';
+    return `<span class="pip ${st}${q.type === 'battle' ? ' battle' : ''}"></span>`;
+  }).join('');
+  $('#pips').innerHTML = pips;
 }
-function updateTimer(left) {
+function setInstruction(text, mode = 'go') {
+  const el = $('#instruction');
+  el.className = mode === 'go' ? '' : mode;
+  $('#instr-text').textContent = text;
+}
+function updateClock(left) {
+  const showClock = ['question', 'intro', 'recap'].includes(S.phase);
   const secs = Math.max(0, Math.ceil(left / 1000));
-  $('#timer-num').textContent = S.paused ? 'II' : secs;
-  const frac = S.dur ? Math.max(0, left / S.dur) : 0;
-  $('#timer-arc').style.strokeDashoffset = String(276.5 * (1 - frac));
-  $('#timer').classList.toggle('low', S.phase === 'question' && secs <= 5);
+  $('#clock').textContent = !showClock ? '' : S.paused ? 'II' : String(secs);
+  const frac = S.dur ? Math.max(0, Math.min(1, left / S.dur)) : 0;
+  $('#timefill').style.width = (showClock ? frac * 100 : 0) + '%';
+  const low = S.phase === 'question' && secs <= 5;
+  $('#timebar').classList.toggle('low', low);
+  $('#instruction').classList.toggle('low', low);
 }
-function setCta(t) { $('#cta').textContent = t; }
+let eventDefault = '';
+function setEvent(html) { eventDefault = html; if (!alertBusy) paintEvent(html, false); }
+function paintEvent(html, alert) { const e = $('#eventline'); e.innerHTML = html ? `<span>${html}</span>` : ''; e.classList.toggle('alert', alert); }
+const alertQ = [];
+let alertBusy = false;
+function addAlert(html) { alertQ.push(html); if (alertQ.length > 6) alertQ.shift(); if (!alertBusy) nextAlert(); }
+function nextAlert() {
+  if (!alertQ.length) { alertBusy = false; paintEvent(eventDefault, false); return; }
+  alertBusy = true;
+  paintEvent(alertQ.shift(), true);
+  setTimeout(nextAlert, 3000);
+}
 
+// ------------------------------------------------------------------ screen: panels
+const THEME_DESC = {
+  'Career Paths': 'We list the teams. You name the player.',
+  'Stat Lines': 'A real season stat line. Whose was it?',
+  'Draft & Bio': 'Draft nights, colleges and hometowns.',
+  'Awards & Rings': 'MVPs, Finals MVPs, rings and All-Star picks.',
+  'Record Book': 'All-time and active career leaders.',
+  'Money Talks': 'Salaries and career earnings.',
+  'Jersey Kings': 'The NBA\'s best-selling jerseys.',
+  'Around the World': 'The league\'s international stars.',
+  'Name the Face': 'The photo zooms out. Name him first.',
+  'Franchise Legends': 'Every team\'s top scorers since 2000-01.',
+  'Mixed': 'A bit of everything.',
+};
 function renderIntro() {
-  renderHeader();
-  const how = {
-    'Career Paths': 'We show the teams. You name the player.',
-    'Stat Lines': 'A real season stat line. Whose was it?',
-    'Draft & Bio': 'Draft nights, colleges, hometowns.',
-    'Awards & Rings': 'MVPs, Finals MVPs, rings and All-Star nods.',
-    'Record Book': 'All-time leaders and career records.',
-    'Money Talks': 'Salaries and career earnings.',
-    'Jersey Kings': 'The NBA\'s best-selling jerseys.',
-    'Around the World': 'The league\'s international stars.',
-    'Name the Face': 'The photo zooms out. Be first to name him.',
-    'Franchise Legends': 'Every franchise\'s all-time greats.',
-    'Mixed': 'A bit of everything.',
-  }[S.theme] || '';
-  inner().innerHTML = `<div class="intro"><div class="gno">Game ${S.game}</div><div class="th">${esc(S.theme)}</div>
-    <div class="how">${esc(how)}</div><div class="by">Type your answers in chat. Fastest correct answer scores the most.</div></div>`;
-  setCta('NEW GAME STARTING');
-  $('#ticker-correct').innerHTML = '';
+  renderThemebar();
+  body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
+    <div class="rules">
+      <div class="rule"><b>1</b>Type your answer in the chat</div>
+      <div class="rule"><b>2</b>Fastest correct answer scores the most points</div>
+      <div class="rule"><b>3</b>Send a theme's gift to pick the next game</div>
+    </div>`;
+  setInstruction(`${S.queue.length} questions. Starting in`, 'wait');
+  setEvent(S.game > 1 ? 'Scores for this game reset. The stream leaderboard keeps counting' : 'Welcome. No sign-up, just type in the chat');
   renderBoards();
 }
+function instructionFor(q) {
+  if (q.type === 'guess') return 'Type the player\'s name';
+  if (q.type === 'mc') return isTF(q) ? 'Type TRUE or FALSE' : 'Type A, B, C or D';
+  if (q.type === 'hl') return 'Type A or B';
+  if (q.type === 'battle') return 'Vote: type A or B';
+  if (q.type === 'board') return 'Type as many names as you can';
+  if (q.type === 'closest') return 'Type a number. Closest wins';
+  return 'Type your answer';
+}
 function promptHtml(q) {
-  const long = q.prompt.length > 48 ? ' long' : '';
-  return `<div class="prompt${long}">${esc(q.prompt)}</div>` + (q.sub ? `<div class="sub">${esc(q.sub)}</div>` : '');
+  return `<div class="prompt${q.prompt.length > 46 ? ' long' : ''}">${esc(q.prompt)}</div>` + (q.sub ? `<div class="sub">${esc(q.sub)}</div>` : '');
 }
-function renderQuestion() {
-  renderHeader();
-  const q = S.q, c = inner();
-  if (q.type === 'guess') { renderGuessBody(true); setCta('TYPE THE PLAYER\'S NAME IN CHAT'); return; }
-  let h = promptHtml(q);
+function renderQuestion(keepEvent) {
+  renderThemebar();
+  const q = S.q;
+  setInstruction(instructionFor(q));
+  if (!keepEvent) setEvent(q.type === 'battle' ? 'No wrong answers. Everyone on the winning side scores'
+    : q.type === 'board' ? `${CFG.points.board * (S.qMult || 1)} points for every name you find`
+    : q.type === 'closest' ? 'Your last number counts. Top 3 closest score'
+    : q.type === 'guess' ? 'Clues and letters appear as the clock runs down'
+    : `Your first answer counts. Worth ${basePoints(q)} points`);
+  if (q.type === 'guess') return renderGuess();
+  let h = '';
   if (q.type === 'mc') {
-    const tf = q.options.length === 2 && q.options[0] === 'True';
-    if (q.image) h += `<div class="opt-face">${img(q.image)}</div>`;
-    h += '<div class="opts">' + q.options.map((o, i) => `<div class="opt${S.struck.has(i) ? ' struck' : ''}" data-i="${i}"><div class="bar"></div><span class="k">${tf ? (i ? 'F' : 'T') : 'ABCD'[i]}</span><span class="t">${esc(o)}</span><span class="n"></span></div>`).join('') + '</div>';
-    setCta(tf ? 'TYPE TRUE OR FALSE IN CHAT' : 'TYPE A, B, C OR D IN CHAT');
+    h += q.image ? `<div class="row-head">${photo(q.image, 'sm')}${promptHtml(q)}</div>` : promptHtml(q);
+    h += '<div class="opts">' + q.options.map((o, i) => `<div class="opt${S.struck.has(i) ? ' struck' : ''}"><span class="k">${isTF(q) ? (i ? 'F' : 'T') : 'ABCD'[i]}</span><span class="t">${esc(o)}</span></div>`).join('') + '</div>';
   } else if (q.type === 'hl' || q.type === 'battle') {
-    h += '<div class="vs">' + q.sides.map((s, i) => `<div class="side" data-i="${i}"><div class="key">${'AB'[i]}</div><div class="ph">${img(s.img)}</div><div class="nm">${esc(s.name)}</div>` +
-      (q.type === 'hl' ? `<div class="val hide">???</div>` : `<div class="val" style="font-size:34px">${esc(s.value || '')}</div><div class="votes"></div>`) + '</div>').join('') + '<div class="mid">VS</div></div>';
-    if (q.type === 'battle') h += '<div class="splitbar"><div class="l" style="width:50%"></div><div class="r"></div></div>';
-    setCta(q.type === 'battle' ? 'VOTE: TYPE A OR B IN CHAT' : 'TYPE A OR B IN CHAT');
+    h += promptHtml(q) + vsHtml(q, false);
   } else if (q.type === 'board') {
-    const one = q.slots.length <= 5 ? ' one' : '';
-    h += `<div class="slots${one}">` + q.slots.map((s, i) => {
-      const f = S.filled[i];
-      if (f) return `<div class="slot filled"><span class="lab">${esc(s.label)}</span><span class="mini">${img(s.img)}</span><span><div class="who">${esc(s.name)}</div><div class="by">${f.hint ? 'hint' : esc(displayName(f.u))}</div></span></div>`;
-      return `<div class="slot"><span class="lab">${esc(s.label)}</span><span class="who">${'?'.repeat(3)}</span></div>`;
-    }).join('') + '</div>';
-    h += `<div class="boardcount">${S.filled.filter(Boolean).length} / ${q.slots.length} found</div>`;
-    setCta('NAME AS MANY AS YOU CAN IN CHAT');
+    h += promptHtml(q) + slotsHtml(q, false) + `<div class="found">${S.filled.filter(Boolean).length} of ${q.slots.length} found</div>`;
   } else if (q.type === 'closest') {
-    if (q.image) h += `<div class="opt-face" style="width:220px;height:220px">${img(q.image)}</div>`;
-    h += `<div class="bignum">?</div><div class="guesses" id="guesses">0 guesses so far</div>`;
-    setCta('TYPE A NUMBER. CLOSEST WINS');
+    h += q.image ? `<div class="row-head">${photo(q.image, 'sm')}<div style="flex:1">${promptHtml(q)}</div></div>` : promptHtml(q);
+    h += `<div class="closest-body"><div class="guesscount" id="gcount">0<small>guesses</small></div></div>`;
   }
-  c.innerHTML = h;
-  renderLiveCounts();
+  body().innerHTML = h;
+  renderLive();
 }
-function renderGuessBody(full) {
+function vsHtml(q, reveal) {
+  const t = S.battleVotes[0] + S.battleVotes[1];
+  const sides = q.sides.map((s, i) => {
+    let cls = '';
+    if (reveal && q.type === 'hl') cls = i === q.correct ? ' right' : ' fade';
+    if (reveal && q.type === 'battle' && S.battleWin >= 0) cls = i === S.battleWin ? ' right' : ' fade';
+    const val = q.type === 'hl' ? `<div class="val${reveal ? '' : ' hide'}">${reveal ? esc(s.value) : '?'}</div>` : '';
+    const meta = q.type === 'battle' ? `<div class="meta">${esc(s.value || '')}</div>` : '';
+    return `<div class="side${cls}"><div class="k">${'AB'[i]}</div>${photo(s.img)}<div class="nm">${esc(s.name)}</div>${val}${meta}</div>`;
+  }).join('');
+  let split = '';
+  if (q.type === 'battle') {
+    const pa = t ? Math.round(100 * S.battleVotes[0] / t) : 50;
+    split = `<div class="split"><div class="a" id="split-a" style="width:${pa}%">A ${t ? pa + '%' : ''}</div><div class="b" id="split-b">${t ? (100 - pa) + '%' : ''} B</div></div>`;
+  }
+  return `<div class="vs">${sides}</div>${split}`;
+}
+function slotsHtml(q, reveal) {
+  const one = q.slots.length <= 5 ? ' one' : '';
+  return `<div class="slots${one}">` + q.slots.map((s, i) => {
+    const f = S.filled[i];
+    if (f) return `<div class="slot got"><span class="lab">${esc(s.label)}</span>${photo(s.img, 'xs')}<span><div class="who">${esc(s.name)}</div><div class="by">${f.hint ? 'gift hint' : esc(displayName(f.u))}</div></span></div>`;
+    if (reveal) return `<div class="slot miss"><span class="lab">${esc(s.label)}</span>${photo(s.img, 'xs')}<span><div class="who">${esc(s.name)}</div><div class="by">missed</div></span></div>`;
+    return `<div class="slot"><span class="lab">${esc(s.label)}</span><span class="blank"></span></div>`;
+  }).join('') + '</div>';
+}
+function renderGuess() {
   const q = S.q, P = S.revealPlan;
   if (!q || q.type !== 'guess' || S.phase !== 'question') return;
-  const c = inner();
-  const shownClues = P ? P.shownClues : q.clues.length;
+  const shown = P ? P.shownClues : q.clues.length;
   let h = promptHtml(q);
-  if (q.image && q.imageMode === 'zoom') h += `<div class="face-wrap">${img(q.image)}</div>`;
-  h += '<div class="clues">' + q.clues.map((cl, i) => i < shownClues
-    ? `<div class="clue">${esc(cl)}</div>` : (q.image ? '' : `<div class="clue next">.</div>`)).join('') + '</div>';
-  const words = q.answer.split(' ');
-  const totalChars = q.answer.replace(/ /g, '').length;
-  const small = totalChars > 15 ? ' small' : '';
+  const zoom = q.imageMode === 'zoom' && q.image;
+  if (zoom) h += `<div class="zoombox"><img src="${CFG.imgBase}${encodeURIComponent(q.image)}" alt=""></div>`;
+  h += `<div class="clues${zoom ? ' compact' : ''}">` + q.clues.map((c, i) => i < shown
+    ? `<div class="clue"><span class="n">${i + 1}</span><span>${esc(c)}</span></div>`
+    : `<div class="clue locked"><span class="n">${i + 1}</span><span>Unlocks soon</span></div>`).join('') + '</div>';
+  const letters = q.answer.replace(/ /g, '').length;
   let pos = 0;
-  h += '<div class="letters">' + words.map(w => {
+  h += `<div class="letters${letters > 14 ? ' small' : ''}">` + q.answer.split(' ').map(w => {
     const tiles = [...w].map(ch => {
       const i = pos++;
-      if (!/[a-z0-9]/i.test(ch)) return `<span class="tile punct${small}">${esc(ch)}</span>`;
-      const show = P && P.shownLetters.has(i);
-      return `<span class="tile${small}${show ? ' shown' : ''}">${show ? esc(ch.toUpperCase()) : ''}</span>`;
+      if (!/[a-z0-9]/i.test(ch)) return `<span class="tile p">${esc(ch)}</span>`;
+      const on = P && P.shownLetters.has(i);
+      return `<span class="tile${on ? ' on' : ''}">${on ? esc(ch.toUpperCase()) : ''}</span>`;
     }).join('');
     pos++;
     return `<span class="word">${tiles}</span>`;
   }).join('') + '</div>';
-  const keepZoom = c.querySelector('.face-wrap img');
-  c.innerHTML = h;
-  if (keepZoom) { const i = c.querySelector('.face-wrap img'); if (i) i.style.transform = keepZoom.style.transform; }
+  const old = body().querySelector('.zoombox img');
+  const keep = old ? old.style.transform : '';
+  body().innerHTML = h;
+  const z = body().querySelector('.zoombox img');
+  if (z && keep) z.style.transform = keep;
+  if (z) z.onerror = () => z.parentNode.remove();
 }
-function renderLiveCounts() {
+function renderLive() {
   const q = S.q;
   if (!q || S.phase !== 'question') return;
-  if (q.type === 'mc' || q.type === 'hl') {
-    $('#cta').textContent = (q.type === 'hl' ? 'TYPE A OR B IN CHAT' : (q.options.length === 2 ? 'TYPE TRUE OR FALSE IN CHAT' : 'TYPE A, B, C OR D IN CHAT')) + (S.answered.size ? ` · ${S.answered.size} ANSWERED` : '');
+  if ((q.type === 'mc' || q.type === 'hl') && S.answered.size) {
+    if (!S.correct.length) setEvent(`<b>${S.answered.size}</b> answer${S.answered.size === 1 ? '' : 's'} locked in`);
   } else if (q.type === 'battle') {
     const [a, b] = S.battleVotes, t = a + b;
-    const l = $('.splitbar .l'); if (l) l.style.width = (t ? (100 * a / t) : 50) + '%';
-    document.querySelectorAll('.side').forEach((s, i) => {
-      s.querySelector('.votes').textContent = t ? `${Math.round(100 * S.battleVotes[i] / t)}% · ${S.battleVotes[i]} votes` : '';
-      s.classList.toggle('lead', t > 0 && S.battleVotes[i] > S.battleVotes[1 - i]);
-    });
+    const pa = t ? Math.round(100 * a / t) : 50;
+    const A = $('#split-a'), B = $('#split-b');
+    if (A) { A.style.width = pa + '%'; A.textContent = `A ${t ? pa + '%' : ''}`; B.textContent = `${t ? (100 - pa) + '%' : ''} B`; }
+    if (t) setEvent(`<b>${t}</b> vote${t === 1 ? '' : 's'} so far`);
   } else if (q.type === 'closest') {
-    const g = $('#guesses'); if (g) g.textContent = `${S.closest.size} guess${S.closest.size === 1 ? '' : 'es'} so far`;
+    const g = $('#gcount'); if (g) g.innerHTML = `${S.closest.size}<small>guess${S.closest.size === 1 ? '' : 'es'}</small>`;
   }
 }
+function winnersHtml(n = 3) {
+  return '<div class="winners">' + S.correct.slice(0, n).map((c, i) =>
+    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${esc(displayName(c.u))}${(S.streaks.get(c.u) || 0) >= 3 ? ` (${S.streaks.get(c.u)} in a row)` : ''}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
+}
 function renderReveal() {
-  renderHeader();
+  renderThemebar();
   const q = S.q;
-  let h = '<div class="reveal">';
-  if (q.type === 'battle') {
-    const t = S.battleVotes[0] + S.battleVotes[1];
-    h += `<div class="label">CHAT HAS SPOKEN</div>`;
-    if (S.battleWin >= 0) {
-      const s = q.sides[S.battleWin];
-      h += `<div class="ans">${esc(s.name)}</div><div class="face">${img(s.img)}</div>
-        <div class="fact">${Math.round(100 * S.battleVotes[S.battleWin] / t)}% of ${t} votes. Everyone on the winning side gets +${CFG.points.battle * (S.qMult || 1)}</div>`;
-    } else h += `<div class="ans mid">It's a tie</div><div class="fact">${t} votes, split right down the middle</div>`;
-  } else if (q.type === 'board') {
-    const n = S.filled.filter(f => f && !f.hint).length;
-    h += `<div class="label">BOARD COMPLETE</div><div class="ans mid">${n} of ${q.slots.length} found</div>`;
-    h += '<div class="slots' + (q.slots.length <= 5 ? ' one' : '') + '" style="width:100%">' + q.slots.map((s, i) => {
-      const f = S.filled[i];
-      return `<div class="slot ${f ? 'filled' : 'missed'}"><span class="lab">${esc(s.label)}</span><span class="mini">${img(s.img)}</span><span><div class="who">${esc(s.name)}</div><div class="by">${f ? (f.hint ? 'hint' : esc(displayName(f.u))) : 'nobody got it'}</div></span></div>`;
+  let h = '';
+  const nCorrect = S.correct.length;
+  if (q.type === 'mc') {
+    const counts = q.options.map((_, i) => [...S.answered.values()].filter(a => a.idx === i).length);
+    const tot = counts.reduce((a, b) => a + b, 0) || 1;
+    h += q.image ? `<div class="row-head">${photo(q.image, 'sm')}${promptHtml(q)}</div>` : promptHtml(q);
+    h += '<div class="opts">' + q.options.map((o, i) => {
+      const pct = Math.round(100 * counts[i] / tot);
+      return `<div class="opt ${i === q.correct ? 'right' : 'fade'}"><div class="bar" style="width:calc(${pct}% - ${pct ? 0 : 0}px)"></div><span class="k">${isTF(q) ? (i ? 'F' : 'T') : 'ABCD'[i]}</span><span class="t">${esc(o)}</span><span class="pct">${counts.some(Boolean) ? pct + '%' : ''}</span></div>`;
     }).join('') + '</div>';
+    setInstruction(`Answer: ${isTF(q) ? q.answer : 'ABCD'[q.correct] + ', ' + q.answer}`, 'answer');
+    setEvent(nCorrect ? `<b>${nCorrect}</b> got it right. Fastest: <b>${esc(displayName(S.correct[0].u))}</b> +${S.correct[0].pts}` : 'Nobody got this one');
+  } else if (q.type === 'hl') {
+    h += promptHtml(q) + vsHtml(q, true);
+    setInstruction(`Answer: ${'AB'[q.correct]}, ${q.answer}`, 'answer');
+    setEvent(nCorrect ? `<b>${nCorrect}</b> got it right. Fastest: <b>${esc(displayName(S.correct[0].u))}</b> +${S.correct[0].pts}` : 'Nobody got this one');
+  } else if (q.type === 'battle') {
+    const t = S.battleVotes[0] + S.battleVotes[1];
+    h += promptHtml(q) + vsHtml(q, true);
+    if (S.battleWin >= 0) {
+      setInstruction(`Chat picked ${q.sides[S.battleWin].name}`, 'answer');
+      setEvent(`<b>${Math.round(100 * S.battleVotes[S.battleWin] / t)}%</b> of ${t} votes. Everyone on that side +${CFG.points.battle * (S.qMult || 1)}`);
+    } else { setInstruction('It\'s a tie', 'answer'); setEvent(t ? `${t} votes, split down the middle` : 'No votes this time'); }
+  } else if (q.type === 'board') {
+    const got = S.filled.filter(f => f && !f.hint).length;
+    h += promptHtml(q) + slotsHtml(q, true);
+    setInstruction(`Chat found ${got} of ${q.slots.length}`, 'answer');
+    const top = [...S.correct].sort((a, b) => b.pts - a.pts)[0];
+    setEvent(top ? `Most found: <b>${esc(displayName(top.u))}</b> +${top.pts}` : 'Nobody found one this time');
   } else if (q.type === 'closest') {
-    h += `<div class="label">THE ANSWER</div><div class="ans">${esc(q.answer)}</div>`;
-    if (q.fact) h += `<div class="fact">${esc(q.fact)}</div>`;
-    h += '<div class="closest-list" style="width:100%">' + (S.closestRows || []).map((r, i) =>
-      `<div class="closest-row${i === 0 ? ' win' : ''}"><span>${i + 1}. ${esc(displayName(r.u))} said ${fmt(r.v)}</span><span style="color:var(--gold)">+${r.pts}</span></div>`).join('') +
-      (S.closestRows && S.closestRows.length ? '' : '<div class="closest-row">No guesses this time</div>') + '</div>';
-  } else {
-    const face = q.revealImage || (q.type === 'guess' ? q.image : null) || (q.type === 'hl' ? q.sides[q.correct].img : null);
-    h += `<div class="label">CORRECT ANSWER</div><div class="ans${q.answer.length > 18 ? ' mid' : ''}">${esc(q.answer)}</div>`;
-    if (face) h += `<div class="face">${img(face)}</div>`;
-    if (q.type === 'hl') h += `<div class="fact">${esc(q.sides[0].name)}: ${esc(q.sides[0].value)} · ${esc(q.sides[1].name)}: ${esc(q.sides[1].value)}</div>`;
-    if (q.fact) h += `<div class="fact">${esc(q.fact)}</div>`;
-    if (q.type === 'mc') {
-      const counts = q.options.map((_, i) => [...S.answered.values()].filter(a => a.idx === i).length);
-      const tot = counts.reduce((a, b) => a + b, 0);
-      if (tot) h += `<div class="count">${counts[q.correct]} of ${tot} got it right</div>`;
-    } else h += `<div class="count">${S.correct.length ? S.correct.length + ' correct' : 'Nobody got it'}</div>`;
-    h += '<div class="winners">' + S.correct.slice(0, 4).map((c, i) =>
-      `<div class="winner" style="animation-delay:${i * 80}ms"><span>${i === 0 ? 'Fastest: ' : ''}${esc(displayName(c.u))}${(S.streaks.get(c.u) || 0) >= 3 ? ' · ' + S.streaks.get(c.u) + ' in a row' : ''}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
+    h += `<div class="ans-wrap">${photo(q.image)}<div><div class="ans-name">${esc(q.answer)}</div>${q.fact ? `<div class="ans-fact">${esc(q.fact)}</div>` : ''}<div class="ans-q">${esc(q.prompt)}</div></div></div>`;
+    h += '<div class="cl-rows">' + (S.closestRows || []).map((r, i) => `<div class="cl-row"><span>${i + 1}. ${esc(displayName(r.u))} said ${fmt(r.v)}</span><span class="p">+${r.pts}</span></div>`).join('') + '</div>';
+    if (!S.closestRows || !S.closestRows.length) h += '<div class="nobody">No guesses this time</div>';
+    setInstruction(`The answer: ${q.answer}`, 'answer');
+    setEvent(S.closestRows && S.closestRows.length ? `Closest: <b>${esc(displayName(S.closestRows[0].u))}</b> +${S.closestRows[0].pts}` : '');
+  } else {   // guess
+    const face = q.revealImage || q.image;
+    h += `<div class="ans-wrap">${photo(face)}<div><div class="ans-name${q.answer.length > 16 ? ' mid' : ''}">${esc(q.answer)}</div>${q.fact ? `<div class="ans-fact">${esc(q.fact)}</div>` : ''}</div></div>`;
+    h += nCorrect ? winnersHtml(4) : '<div class="nobody">Nobody got this one</div>';
+    setInstruction(`The answer: ${q.answer}`, 'answer');
+    setEvent(nCorrect ? `<b>${nCorrect}</b> named him` : '');
   }
-  h += '</div>';
-  inner().innerHTML = h;
-  setCta(S.qi + 1 >= S.queue.length ? 'GAME RECAP NEXT' : 'NEXT QUESTION COMING UP');
+  body().innerHTML = h;
   renderBoards();
 }
 function renderRecap() {
-  renderHeader();
-  const st = S.stats, top = [...S.gameScores.entries()].sort((a, b) => b[1] - a[1]);
-  const li = [];
-  if (top.length) li.push(`Game winner: <b>${esc(displayName(top[0][0]))}</b> with ${fmt(top[0][1])} points`);
-  li.push(`<b>${fmt(st.answers)}</b> answers from <b>${st.players.size}</b> players`);
-  if (st.fastest) li.push(`Fastest: <b>${esc(displayName(st.fastest.u))}</b> in ${st.fastest.s.toFixed(1)}s`);
-  if (st.hardest) li.push(`Hardest: <b>${esc(st.hardest.a.length > 40 ? st.hardest.a.slice(0, 40) + '...' : st.hardest.a)}</b>, ${st.hardest.n} got it`);
-  const streak = [...S.streaks.entries()].sort((a, b) => b[1] - a[1])[0];
-  if (streak && streak[1] >= 3) li.push(`Hot streak: <b>${esc(displayName(streak[0]))}</b>, ${streak[1]} in a row`);
-  inner().innerHTML = `<div class="recap"><h2>Game ${S.game} recap</h2><ul>${li.map(x => `<li>${x}</li>`).join('')}</ul></div>`;
-  setCta('SEND A GIFT TO PICK THE NEXT THEME');
+  renderThemebar();
+  const st = S.stats, top = [...S.gameScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  let h = `<div class="prompt">${esc(S.theme)}: final scores</div>`;
+  h += '<div class="recap-list winners" style="margin-top:26px">' + (top.length ? top.map(([u, v], i) =>
+    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${esc(displayName(u))}</span><span class="p">${fmt(v)}</span></div>`).join('')
+    : '<div class="winner"><span class="u">No scores this game</span></div>') + '</div>';
+  const facts = [`${fmt(st.answers)} answers from ${st.players.size} players`];
+  if (st.fastest) facts.push(`Fastest answer: ${displayName(st.fastest.u)} in ${st.fastest.s.toFixed(1)}s`);
+  h += `<div class="ans-fact" style="margin-top:auto">${facts.map(esc).join('<br>')}</div>`;
+  body().innerHTML = h;
+  setInstruction('Next theme locks in', 'go');
+  setEvent(top.length ? `<b>${esc(displayName(top[0][0]))}</b> wins game ${S.game}` : '');
 }
 function renderVoteResult(theme, votes) {
-  inner().innerHTML = `<div class="intro"><div class="gno">Next up</div><div class="th">${esc(theme)}</div>
-    <div class="how">${votes > 0 ? `Picked by your gifts: ${fmt(votes)} votes` : 'Picked at random. Send a gift to choose the next one'}</div></div>`;
-  setCta('GET READY');
+  renderThemebar();
+  body().innerHTML = `<div class="big-center"><div class="title">${esc(theme)}</div><div class="desc">${esc(THEME_DESC[theme] || '')}</div></div>`;
+  setInstruction(`Up next: ${theme}`, 'wait');
+  setEvent(votes > 0 ? `Picked by your gifts: <b>${fmt(votes)}</b> votes` : 'Picked at random. Send a gift to choose the next one');
 }
 function renderVote() {
-  const tot = S.votes.reduce((a, b) => a + b, 0), max = Math.max(...S.votes);
-  $('#vote-tiles').innerHTML = S.voteThemes.map((t, i) => `<div class="vt${max > 0 && S.votes[i] === max ? ' lead' : ''}">
-    <div class="g">${esc(CFG.themeGifts[i] || '')}</div><div class="nm">${esc(t)}</div><div class="c">${S.votes[i] || ''}</div>
-    <div class="fill" style="width:${tot ? 100 * S.votes[i] / tot : 0}%"></div></div>`).join('');
+  const max = Math.max(...S.votes);
+  $('#vote-cols').innerHTML = S.voteThemes.map((t, i) => `<div class="vc${max > 0 && S.votes[i] === max ? ' lead' : ''}">
+    <div class="top"><span class="gift">${esc(CFG.themeGifts[i] || '')}</span><span class="n">${S.votes[i]}</span></div><div class="th">${esc(t)}</div></div>`).join('');
 }
 function renderBoards() {
-  const fill = (sel, entries, unit) => {
+  const fill = (sel, entries) => {
     const rows = entries.slice(0, 4);
-    $(sel).innerHTML = rows.length ? rows.map(([u, v], i) => `<li><span class="u">${i + 1}. ${esc(displayName(u))}</span><span class="s">${fmt(v)}${unit}</span></li>`).join('')
-      : '<li class="empty">Be the first</li>';
+    $(sel).innerHTML = rows.length ? rows.map(([u, v], i) => `<li><span class="u">${i + 1}. ${esc(displayName(u))}</span><span class="s">${fmt(v)}</span></li>`).join('')
+      : '<li class="empty">Nobody yet</li>';
   };
-  fill('#lb-game', [...S.gameScores.entries()].sort((a, b) => b[1] - a[1]), '');
-  fill('#lb-stream', [...S.streamScores.entries()].sort((a, b) => b[1] - a[1]), '');
-  fill('#lb-gift', [...S.gifters.entries()].sort((a, b) => b[1] - a[1]), '');
+  fill('#lb-stream', [...S.streamScores.entries()].sort((a, b) => b[1] - a[1]));
+  fill('#lb-gift', [...S.gifters.entries()].sort((a, b) => b[1] - a[1]));
 }
 function renderLikes() {
   const got = S.likes - S.likeBase;
   $('#likefill').style.width = Math.min(100, 100 * got / S.likeGoal) + '%';
-  $('#liketext').textContent = `Likes ${fmt(got)} / ${fmt(S.likeGoal)}: hit the goal for a BLITZ ROUND, double points`;
-}
-function pushTicker(u, pts, first) {
-  const t = $('#ticker-correct');
-  const chip = el('div', 'tc' + (first ? ' first' : ''), `${first ? 'FIRST ' : ''}${esc(displayName(u))} <b>+${pts}</b>`);
-  t.prepend(chip);
-  while (t.children.length > 6) t.lastChild.remove();
-}
-// Alerts replace the bottom strip for a few seconds (in-page, never a pop-up over the quiz)
-const alertQ = [];
-let alertBusy = false;
-function addAlert(html) {
-  alertQ.push(html);
-  if (alertQ.length > 6) alertQ.shift();
-  if (!alertBusy) nextAlert();
-}
-function nextAlert() {
-  const a = $('#alert-strip');
-  if (!alertQ.length) { alertBusy = false; a.classList.remove('show'); return; }
-  alertBusy = true;
-  a.innerHTML = alertQ.shift();
-  a.classList.remove('show'); void a.offsetWidth; a.classList.add('show');
-  setTimeout(nextAlert, 3200);
-}
-const HINTS = () => [
-  'Type your answer in chat. <b>Fastest correct answer</b> scores the most',
-  `<b>${CFG.themeGifts.join(', ')}</b> pick the next theme. 1 coin = 1 vote`,
-  `Gifts of <b>${CFG.powerups.hint}+ coins</b> drop a hint for everyone`,
-  `<b>${CFG.powerups.double}+ coins</b>: double points on the next question`,
-  `<b>${CFG.powerups.blitz}+ coins</b> or the like goal: <b>BLITZ ROUND</b>`,
-  `Follow <b>+${CFG.points.follow}</b> · Share the LIVE <b>+${CFG.points.share}</b> points`,
-  'New here? Just type your answer. <b>No sign-up</b>',
-];
-let hintIdx = 0;
-function rotateHint() {
-  if (!S.connected && !PRACTICE) { $('#hint-line').innerHTML = esc(S.statusText || 'Connecting to chat...'); return; }
-  const h = HINTS();
-  $('#hint-line').innerHTML = h[hintIdx++ % h.length];
+  $('#liketext').textContent = `Tap likes: ${fmt(got)} / ${fmt(S.likeGoal)} unlocks a blitz round`;
 }
 function preload(q) {
   if (!q) return;
   [q.image, q.revealImage, ...(q.sides || []).map(s => s.img), ...(q.slots || []).map(s => s.img)]
     .filter(Boolean).forEach(f => { const i = new Image(); i.src = CFG.imgBase + encodeURIComponent(f); });
 }
-
-// ------------------------------------------------------------------ layout: scale the 1080x1920 stage to the window
 function fit() {
   const s = Math.min(window.innerWidth / 1080, window.innerHeight / 1920);
   const st = $('#stage');
@@ -730,13 +725,15 @@ function fit() {
 
 // ------------------------------------------------------------------ live events from the bridge
 function connectBridge() {
-  let es;
   const open = () => {
+    let es;
     try { es = new EventSource('/events'); } catch (e) { return setTimeout(open, 3000); }
     es.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) {} };
-    es.onerror = () => { S.connected = false; S.statusText = 'Quiz bridge not running. Start it with START-HOOPSHYPE-QUIZ.bat'; es.close(); setTimeout(open, 3000); };
+    es.onerror = () => { S.connected = false; S.statusText = 'Quiz bridge not running: start it with START-HOOPSHYPE-QUIZ.bat'; es.close(); setTimeout(open, 3000); };
   };
   open();
+  // While the chat isn't connected, say so in the like bar instead of hiding it
+  setInterval(() => { if (!S.connected) $('#liketext').textContent = S.statusText || 'Connecting to chat...'; else renderLikes(); }, 3000);
 }
 
 // ------------------------------------------------------------------ practice simulator (fake chat, gifts, likes)
@@ -745,17 +742,15 @@ function startPractice() {
   const bots = ['hoopsfan23', 'Lakeshow4L', 'bucketsgetter', 'mamba_mentality', 'jokicmagic', 'Celtics_17', 'curryrange30',
     'dunkcity', 'goatdebate', 'NBAnerd', 'courtvision', 'ballislife', 'triple_double', 'splash_bro', 'thunderup', 'mavsfan41',
     'heatculture', 'knicksknation', 'okc_boomer', 'spursway21', 'rim_protector', 'stepbackthree', 'fastbreak', 'hoopdreams'];
-  const gifts = [['Rose', 1], ['Ice Cream Cone', 1], ['GG', 1], ['Finger Heart', 5], ['Doughnut', 30], ['Hand Hearts', 100], ['Confetti', 100], ['Hat and Mustache', 99], ['Corgi', 299]];
+  const gifts = [['Rose', 1], ['Ice Cream Cone', 1], ['GG', 1], ['Finger Heart', 5], ['Doughnut', 30], ['Hand Hearts', 100], ['Hat and Mustache', 99], ['Corgi', 299]];
   const skill = { easy: 0.55, medium: 0.35, hard: 0.15 };
   const say = (u, text) => onEvent({ kind: 'chat', user: u, nick: u, text });
   setInterval(() => {
     const u = rnd(bots), q = S.q;
-    if (S.phase !== 'question' || !q) { if (Math.random() < 0.3) say(u, rnd(['lets go', 'gg', 'this is fun', 'next one', 'hi from Madrid'])); return; }
-    const elapsed = (now() - S.tStart) / S.dur;
-    const p = (skill[q.difficulty] || 0.35) * (0.4 + elapsed);
-    const right = Math.random() < p;
+    if (S.phase !== 'question' || !q) { if (Math.random() < 0.3) say(u, rnd(['lets go', 'gg', 'next one', 'hi from Madrid'])); return; }
+    const right = Math.random() < (skill[q.difficulty] || 0.35) * (0.4 + (now() - S.tStart) / S.dur);
     if (q.type === 'guess') say(u, right ? q.answer : rnd(['LeBron', 'Kobe Bryant', 'Tim Duncan', 'Chris Paul', 'idk']));
-    else if (q.type === 'mc') say(u, right ? 'ABCD'[q.correct] : rnd(['A', 'B', 'C', 'D'].slice(0, q.options.length)));
+    else if (q.type === 'mc') say(u, isTF(q) ? (right === (q.correct === 0) ? 'true' : 'false') : (right ? 'ABCD'[q.correct] : rnd(['A', 'B', 'C', 'D'])));
     else if (q.type === 'hl') say(u, right ? 'AB'[q.correct] : rnd(['A', 'B']));
     else if (q.type === 'battle') say(u, Math.random() < 0.6 ? 'A' : 'B');
     else if (q.type === 'board') { const s = rnd(q.slots); say(u, right ? s.name.split(' ').slice(-1)[0] : rnd(['Shaq', 'Kobe', 'Iverson'])); }
@@ -774,10 +769,10 @@ window.addEventListener('keydown', e => {
   if (k === 'n' && S.phase === 'question') S.tEnd = now();
   if (k === 'p') {
     S.paused = !S.paused;
-    if (S.paused) S.pausedLeft = S.tEnd - now(); else { S.tEnd = now() + S.pausedLeft; }
-    updateTimer(S.pausedLeft);
+    if (S.paused) S.pausedLeft = S.tEnd - now(); else S.tEnd = now() + S.pausedLeft;
+    updateClock(S.pausedLeft);
   }
-  if (k === 'b') { S.blitzQueued = CFG.blitzLength; addAlert('BLITZ ROUND coming up'); }
+  if (k === 'b') { S.blitzQueued = CFG.blitzLength; addAlert('<b>BLITZ ROUND</b> coming up'); }
   if (k === 'm') muted = !muted;
   if (k === 'r') { S.streamScores = new Map(); renderBoards(); }
 });
@@ -789,22 +784,19 @@ async function boot() {
     const c = await fetch('config.json', { cache: 'no-store' });
     if (c.ok) { const user = await c.json(); CFG = Object.assign({}, DEFAULTS, user.quiz || {}); }
   } catch (e) {}
-  if (params.get('blitz')) S.blitzQueued = CFG.blitzLength;
   S.likeGoal = CFG.likeGoal;
   // Prefer the copy the weekly GitHub job keeps fresh; fall back to the one in this folder
   for (const src of [CFG.questionsUrl, 'data/questions.json'].filter(Boolean)) {
     try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { S.data = await r.json(); break; } } catch (e) {}
   }
-  if (!S.data) { $('#card-inner').innerHTML = '<div class="intro"><div class="th">No questions found</div></div>'; return; }
+  if (!S.data) { body().innerHTML = '<div class="big-center"><div class="title">No questions found</div></div>'; return; }
   S.themes = S.data.themes.slice();
-  renderLikes(); renderBoards(); rotateHint();
-  setInterval(rotateHint, 6000);
+  renderLikes(); renderBoards();
   setInterval(tick, 200);
   if (PRACTICE) startPractice(); else connectBridge();
-  const first = params.get('theme') || 'Mixed';
-  startGame(first);
+  startGame(params.get('theme') || 'Mixed');
 }
 boot();
-// Exposed for testing and for the bridge to forward events in-page if needed
+// Test hooks: play one specific question, or end the current one
 window.HHQ = { onEvent, state: S, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
 })();
