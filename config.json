@@ -1,0 +1,14 @@
+{
+  "tiktokUsername": "hoopshype",
+  "port": 8787,
+  "youtube": {
+    "enabled": false,
+    "handle": "@hoopshype"
+  },
+  "quiz": {
+    "questionsPerGame": 8,
+    "themeGifts": ["Rose", "Ice Cream Cone", "GG", "Finger Heart"],
+    "powerups": { "hint": 30, "double": 99, "blitz": 199 },
+    "likeGoal": 1500
+  }
+}
