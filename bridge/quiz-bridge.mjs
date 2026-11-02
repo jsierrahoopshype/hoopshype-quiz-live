@@ -27,8 +27,50 @@ function status(connected, text) {
 }
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp' };
+// Scores that carry over between streams (champions, weekly board, teams, supporters) live in a file
+// in this folder, so they survive closing the quiz window. Practice mode uses its own file.
+const STATE_DIR = path.join(ROOT, 'saved');
+const CARD_DIR = path.join(ROOT, 'recap-cards');
+fs.mkdirSync(STATE_DIR, { recursive: true });
+const stateFile = practice => path.join(STATE_DIR, practice ? 'practice-state.json' : 'hoopshype-quiz-state.json');
+function readBody(req, limit, cb) {
+  const chunks = []; let size = 0;
+  req.on('data', c => { size += c.length; if (size > limit) req.destroy(); else chunks.push(c); });
+  req.on('end', () => cb(Buffer.concat(chunks).toString('utf8')));
+}
+
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/state') {
+    const file = stateFile(url.searchParams.has('practice'));
+    if (req.method === 'POST') {
+      return readBody(req, 5e6, body => {
+        try {
+          JSON.parse(body);                       // only ever write valid JSON
+          fs.writeFileSync(file + '.tmp', body);
+          fs.renameSync(file + '.tmp', file);     // atomic swap: a crash never leaves half a file
+          res.writeHead(204); res.end();
+        } catch (e) { res.writeHead(400); res.end(); }
+      });
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(fs.existsSync(file) ? fs.readFileSync(file) : '{}');
+  }
+  if (url.pathname === '/card' && req.method === 'POST') {
+    // Recap card PNG from the quiz page: { name, png (base64) }
+    return readBody(req, 2e7, body => {
+      try {
+        const { name, png, txt } = JSON.parse(body);
+        const safe = String(name).replace(/[^a-z0-9._-]/gi, '-').slice(0, 120);
+        if (!/\.(png|txt)$/.test(safe)) throw new Error('bad name');
+        const dir = url.searchParams.has('practice') ? path.join(CARD_DIR, 'practice') : CARD_DIR;
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, safe), txt != null ? String(txt) : Buffer.from(png, 'base64'));
+        log(`Recap card saved: ${path.join(dir, safe)}`);
+        res.writeHead(204); res.end();
+      } catch (e) { res.writeHead(400); res.end(); }
+    });
+  }
   if (url.pathname === '/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     res.write(`data: ${JSON.stringify(lastStatus)}\n\n`);

@@ -8,6 +8,9 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 |---|---|
 | `START-HOOPSHYPE-QUIZ.bat` | Double-click to run the quiz for real. Opens the quiz window and connects to the TikTok LIVE chat. |
 | `PRACTICE-HOOPSHYPE-QUIZ.bat` | Same quiz with fake chat, gifts and likes, so you can watch it without going LIVE. |
+| `UPDATE-HOOPSHYPE-QUIZ.bat` | Downloads the latest version from GitHub. Keeps your saved scores, recap cards and config.json. |
+| `saved/` | Created on first run: champions, weekly board, teams and supporters. Not uploaded to GitHub. |
+| `recap-cards/` | Created on first run: a square and a wide PNG after every game, ready for X and Bluesky. Not uploaded to GitHub. |
 | `config.json` | TikTok username, the four theme-vote gifts, power-up prices, like goal. |
 | `index.html`, `quiz.css`, `quiz.js` | The quiz page itself (1080x1920 portrait). |
 | `bridge/quiz-bridge.mjs` | Reads TikTok chat/gifts/likes and passes them to the quiz page. |
@@ -25,6 +28,14 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 - **Chat battles:** opinion votes, everyone on the winning side scores.
 
 Themes: Career Paths, Stat Lines, Draft & Bio, Awards & Rings, Record Book, Money Talks, Jersey Kings, Around the World, Name the Face, Franchise Legends, plus Mixed.
+
+## Coming-back features
+
+- **Last night's champion** shows in the header all night. A "night" is a US Eastern date that rolls over at 6am ET. When the champion first chats, the quiz calls them out.
+- **This week** board resets every Monday (US Eastern).
+- **Team battle:** viewers type their team once (LAL, BOS, Lakers, Boston...). Every point they score also counts for their team on the weekly team board. A bare team name only joins if you have no team yet; to switch, type "team bos" or "join celtics".
+- **Recap cards** after every game: winner, podium and the hardest question, in `recap-cards/`.
+- **Auto-easing:** if nobody gets 3 questions in a row, the rest of that game switches to easy questions.
 
 ## Money mechanics
 

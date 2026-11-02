@@ -111,18 +111,111 @@ const S = {
   game: 0, theme: null, queue: [], qi: 0, q: null, phase: 'boot',
   tStart: 0, tEnd: 0, dur: 1, paused: false, pausedLeft: 0,
   answered: new Map(), correct: [], closest: new Map(), filled: [], battleVotes: [0, 0],
-  gameScores: new Map(), streamScores: new Map(), gifters: new Map(store('hhq_gifters') || []),
-  names: new Map(), streaks: new Map(),
+  gameScores: new Map(), streamScores: new Map(), gameTeams: new Map(),
+  names: new Map(), streaks: new Map(), dry: 0, qLog: [], chatters: new Set(), seenToday: new Set(),
   voteThemes: [], votes: [0, 0, 0, 0],
   mult: 1, multBy: null, qMult: 1, blitzLeft: 0, blitzQueued: 0,
   likes: 0, likeGoal: DEFAULTS.likeGoal, likeBase: 0,
   revealPlan: null, struck: new Set(), stats: null, connected: false, statusText: '',
 };
-const displayName = u => S.names.get(u) || u;
+const displayName = u => S.names.get(u) || (P.names && P.names[u]) || u;
+// Name plus team tag, e.g. "thunderup (OKC)"
+const who = u => esc(displayName(u)) + (P.teams[u] ? ` <span class="team">${P.teams[u]}</span>` : '');
+
+// ------------------------------------------------------------------ standings that carry over between streams
+// Saved by the bridge to saved/hoopshype-quiz-state.json. A "night" is a US Eastern date that rolls over
+// at 6am ET, so a late game night stays one night. Weeks start Monday, so the weekly board resets on Mondays.
+const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {} };
+function etDate(d = new Date()) {
+  const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  et.setHours(et.getHours() - 6);
+  return et;
+}
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const nightKey = () => ymd(etDate());
+function weekKey() { const d = etDate(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ymd(d); }
+const today = () => (P.days[nightKey()] ||= { scores: {} });
+const thisWeek = () => (P.weeks[weekKey()] ||= { scores: {}, teams: {} });
+function champion() {
+  // top scorer of the most recent night before tonight
+  const key = Object.keys(P.days).filter(k => k < nightKey()).sort().pop();
+  if (!key) return null;
+  const top = Object.entries(P.days[key].scores).sort((a, b) => b[1] - a[1])[0];
+  return top ? { u: top[0], pts: top[1], night: key } : null;
+}
 function addPoints(u, pts) {
   if (!pts) return;
   S.gameScores.set(u, (S.gameScores.get(u) || 0) + pts);
   S.streamScores.set(u, (S.streamScores.get(u) || 0) + pts);
+  const d = today().scores, w = thisWeek();
+  d[u] = (d[u] || 0) + pts;
+  w.scores[u] = (w.scores[u] || 0) + pts;
+  const t = P.teams[u];
+  if (t) { w.teams[t] = (w.teams[t] || 0) + pts; S.gameTeams.set(t, (S.gameTeams.get(t) || 0) + pts); }
+  saveSoon();
+}
+let saveTimer = null;
+function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 4000); }
+async function saveNow() {
+  // keep the file small: 3 weeks of nights, 8 weeks of weekly boards
+  const dk = Object.keys(P.days).sort(); while (dk.length > 21) delete P.days[dk.shift()];
+  const wk = Object.keys(P.weeks).sort(); while (wk.length > 8) delete P.weeks[wk.shift()];
+  const body = JSON.stringify(P);
+  try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { method: 'POST', body }); if (!r.ok) throw 0; }
+  catch (e) { store(PRACTICE ? 'hhq_state_practice' : 'hhq_state', P); }   // no bridge (e.g. opened from GitHub): keep it in the browser
+}
+async function loadState() {
+  let saved = null;
+  try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { cache: 'no-store' }); if (r.ok) saved = await r.json(); } catch (e) {}
+  if (!saved || !Object.keys(saved).length) saved = store(PRACTICE ? 'hhq_state_practice' : 'hhq_state') || {};
+  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {} }, saved);
+}
+
+// The defending champion gets called out the first time they chat each night
+function greetChampion(u) {
+  const c = champion();
+  if (!c || c.u !== u || S.seenToday.has(u)) return;
+  S.seenToday.add(u);
+  addAlert(`Defending champion <b>${esc(displayName(u))}</b> is here. Can anyone beat them?`);
+}
+
+// ------------------------------------------------------------------ team battle
+// Viewers type their team once (code, nickname or city) to join. "team bos" or "join celtics" switches.
+const TEAMS = {
+  ATL: ['Hawks', 'atlanta'], BOS: ['Celtics', 'boston'], BKN: ['Nets', 'brooklyn', 'bkn', 'bk'], CHA: ['Hornets', 'charlotte', 'cha'],
+  CHI: ['Bulls', 'chicago'], CLE: ['Cavaliers', 'cleveland', 'cavs'], DAL: ['Mavericks', 'dallas', 'mavs'], DEN: ['Nuggets', 'denver'],
+  DET: ['Pistons', 'detroit'], GSW: ['Warriors', 'golden state', 'dubs', 'gs'], HOU: ['Rockets', 'houston'], IND: ['Pacers', 'indiana'],
+  LAC: ['Clippers', 'clips'], LAL: ['Lakers', 'lake show'], MEM: ['Grizzlies', 'memphis', 'grizz'], MIA: ['Heat', 'miami'],
+  MIL: ['Bucks', 'milwaukee'], MIN: ['Timberwolves', 'minnesota', 'wolves'], NOP: ['Pelicans', 'new orleans', 'pels', 'nola'],
+  NYK: ['Knicks', 'new york', 'ny'], OKC: ['Thunder', 'oklahoma city', 'okc'], ORL: ['Magic', 'orlando'], PHI: ['76ers', 'philadelphia', 'sixers', 'philly'],
+  PHX: ['Suns', 'phoenix', 'phx', 'phoenix suns'], POR: ['Trail Blazers', 'portland', 'blazers'], SAC: ['Kings', 'sacramento'],
+  SAS: ['Spurs', 'san antonio', 'sa'], TOR: ['Raptors', 'toronto', 'raps'], UTA: ['Jazz', 'utah', 'uta'], WAS: ['Wizards', 'washington', 'wiz', 'wsh'],
+};
+const TEAM_LOOKUP = (() => {
+  const m = new Map();
+  for (const [code, [nick, ...more]] of Object.entries(TEAMS)) [code, nick, ...more].forEach(a => m.set(norm(a), code));
+  return m;
+})();
+function teamFromChat(text) {
+  let t = norm(text);
+  const m = t.match(/^(?:team|join|go|im|i am|vamos|let s go|lets go)\s+(.+)$/);
+  if (m) t = m[1];
+  const code = TEAM_LOOKUP.get(t) || null;
+  // "magic" alone is usually Magic Johnson, not Orlando: needs "team magic"
+  if (code && !m && t === 'magic') return null;
+  return code ? { code, explicit: !!m } : null;
+}
+function maybeJoinTeam(u, text) {
+  const hit = teamFromChat(text);
+  if (!hit) return;
+  // A bare team name (often an answer, like "Lakers" for "who drafted him?") only joins if you have no team yet.
+  // Switching teams needs "team bos" or "join celtics".
+  if (P.teams[u] && !hit.explicit) return;
+  const code = hit.code;
+  if (P.teams[u] === code) return;
+  P.teams[u] = code;
+  addAlert(`<b>${esc(displayName(u))}</b> joined Team ${TEAMS[code][0]}`);
+  renderBoards(); saveSoon();
 }
 const isTF = q => q.type === 'mc' && q.options.length === 2 && q.options[0] === 'True';
 
@@ -169,7 +262,7 @@ function startGame(theme) {
   S.theme = theme;
   S.queue = pickQueue(theme);
   S.qi = 0; S.q = null;
-  S.gameScores = new Map();
+  S.gameScores = new Map(); S.gameTeams = new Map(); S.qLog = []; S.dry = 0;
   S.stats = { answers: 0, players: new Set(), fastest: null, coins: 0 };
   rollVoteThemes();
   setPhase('intro', CFG.times.intro);
@@ -178,7 +271,7 @@ function startGame(theme) {
 function nextQuestion() {
   if (S.qi >= S.queue.length) return endGame();
   const q = S.queue[S.qi];
-  S.q = q; S.answered = new Map(); S.correct = []; S.closest = new Map(); S.struck = new Set();
+  S.q = q; S.answered = new Map(); S.correct = []; S.closest = new Map(); S.struck = new Set(); S.chatters = new Set();
   S.filled = q.slots ? q.slots.map(() => null) : [];
   S.battleVotes = [0, 0];
   if (S.blitzQueued && !S.blitzLeft) { S.blitzLeft = S.blitzQueued; S.blitzQueued = 0; addAlert('<b>BLITZ ROUND</b>: double points, half the time'); }
@@ -199,11 +292,39 @@ function endQuestion() {
   if (q.type === 'battle') scoreBattle(q);
   if (S.blitzLeft > 0) S.blitzLeft -= 1;
   if (S.mult > 1) { S.mult = 1; S.multBy = null; }
+  logQuestion(q);
   setPhase('reveal', CFG.times.reveal);
   sfx.reveal();
   renderReveal();
 }
-function endGame() { setPhase('recap', CFG.times.recap); renderRecap(); }
+// For the recap card ("hardest question") and for easing difficulty when chat keeps missing
+function logQuestion(q) {
+  if (q.type === 'battle') return;
+  const got = q.type === 'board' ? S.filled.filter(f => f && !f.hint).length : q.type === 'closest' ? S.closest.size : S.correct.length;
+  const tried = q.type === 'mc' || q.type === 'hl' ? S.answered.size : q.type === 'closest' ? S.closest.size : S.chatters.size;
+  const total = q.type === 'board' ? q.slots.length : tried;
+  S.qLog.push({ q, got, tried, ratio: total ? got / total : 0 });
+  // closest-number questions always have a "winner", so they don't count as a miss
+  if (q.type !== 'closest') S.dry = got === 0 ? S.dry + 1 : 0;
+  if (S.dry >= 3) { easeUp(); S.dry = 0; }
+}
+// Nobody got 3 in a row: swap the rest of this game's questions for easy ones from the same theme
+function easeUp() {
+  const all = S.data.questions;
+  const inQueue = new Set(S.queue.map(q => q.id));
+  const pool = shuffle(all.filter(q => q.difficulty === 'easy' && q.type !== 'battle' && !S.used.has(q.id) && !inQueue.has(q.id)
+    && (S.theme === 'Mixed' || q.theme === S.theme)));
+  let swapped = 0;
+  for (let i = S.qi + 1; i < S.queue.length; i++) {
+    const q = S.queue[i];
+    if (q.type === 'battle' || q.difficulty === 'easy') continue;
+    const j = pool.findIndex(x => x.type !== 'board');
+    if (j < 0) break;
+    S.queue[i] = pool.splice(j, 1)[0]; swapped++;
+  }
+  S.eased = swapped > 0;
+}
+function endGame() { setPhase('recap', CFG.times.recap); renderRecap(); makeRecapCards(); saveNow(); }
 function afterRecap() {
   let best = -1, idx = 0;
   S.votes.forEach((v, i) => { if (v > best) { best = v; idx = i; } });
@@ -284,8 +405,11 @@ function hintNow(by) {
 // ------------------------------------------------------------------ answers
 function onChat(u, text) {
   if (S.stats) S.stats.players.add(u);
+  greetChampion(u);
+  maybeJoinTeam(u, text);
   const q = S.q;
   if (S.phase !== 'question' || !q || S.paused) return;
+  S.chatters.add(u);
   if (q.type === 'guess') return answerGuess(q, u, text);
   if (q.type === 'mc') return answerChoice(q, u, choiceIndex(q, text));
   if (q.type === 'hl' || q.type === 'battle') return answerChoice(q, u, sideIndex(q, text));
@@ -382,8 +506,8 @@ function registerCorrect(u, pts, quiet) {
   if (S.correct.length === 1) {
     const secs = (now() - S.tStart) / 1000;
     if (!S.stats.fastest || secs < S.stats.fastest.s) S.stats.fastest = { u, s: secs };
-    if (!quiet) { sfx.correct(); setEvent(`<b>${esc(displayName(u))}</b> got it first, +${pts}. Still time to answer`); }
-  } else if (!quiet) setEvent(`<b>${esc(displayName(u))}</b> got it too, +${pts}. ${S.correct.length} correct so far`);
+    if (!quiet) { sfx.correct(); setEvent(`<b>${who(u)}</b> got it first, +${pts}. Still time to answer`); }
+  } else if (!quiet) setEvent(`<b>${who(u)}</b> got it too, +${pts}. ${S.correct.length} correct so far`);
   renderBoards();
 }
 
@@ -391,8 +515,8 @@ function registerCorrect(u, pts, quiet) {
 function onGift(ev) {
   const u = ev.user, total = (ev.coins || 1) * (ev.count || 1);
   S.names.set(u, ev.nick || u);
-  S.gifters.set(u, (S.gifters.get(u) || 0) + total);
-  store('hhq_gifters', [...S.gifters.entries()].sort((a, b) => b[1] - a[1]).slice(0, 200));
+  P.gifters[u] = (P.gifters[u] || 0) + total;
+  P.names[u] = displayName(u);
   if (S.stats) S.stats.coins += total;
   addPoints(u, total * CFG.points.perCoin);
   sfx.gift();
@@ -432,7 +556,7 @@ function onSocial(kind, u) {
   renderBoards();
 }
 function onEvent(ev) {
-  if (ev.user && ev.nick) S.names.set(ev.user, ev.nick);
+  if (ev.user && ev.nick) { S.names.set(ev.user, ev.nick); P.names[ev.user] = ev.nick; }
   switch (ev.kind) {
     case 'chat': onChat(ev.user, ev.text); break;
     case 'gift': onGift(ev); break;
@@ -445,7 +569,8 @@ function onEvent(ev) {
 // ------------------------------------------------------------------ screen: chrome
 const body = () => $('#panel-body');
 function renderThemebar() {
-  $('#gameno').textContent = S.game ? `GAME ${S.game}` : '';
+  const c = champion();
+  $('#gameno').innerHTML = c ? `<span class="champ">Last night's champ: <b>${esc(displayName(c.u))}</b></span>` : '';
   let tag = '';
   if (S.phase === 'question' || S.phase === 'reveal') {
     if (S.blitzLeft > 0) tag = '<span class="tag">BLITZ</span>';
@@ -456,7 +581,7 @@ function renderThemebar() {
     const st = S.phase === 'recap' || S.phase === 'voteResult' || i < S.qi ? 'done' : (i === S.qi && S.phase !== 'intro') ? 'now' : '';
     return `<span class="pip ${st}${q.type === 'battle' ? ' battle' : ''}"></span>`;
   }).join('');
-  $('#pips').innerHTML = pips;
+  $('#pips').innerHTML = (S.game ? `<span class="gno">GAME ${S.game}</span>` : '') + pips;
 }
 function setInstruction(text, mode = 'go') {
   const el = $('#instruction');
@@ -504,8 +629,8 @@ function renderIntro() {
   renderThemebar();
   body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
     <div class="rules">
-      <div class="rule"><b>1</b>Type your answer in the chat</div>
-      <div class="rule"><b>2</b>Fastest correct answer scores the most points</div>
+      <div class="rule"><b>1</b>Type your answer in the chat. Fastest scores most</div>
+      <div class="rule"><b>2</b>Type your team once (LAL, BOS, GSW...) to join the team battle</div>
       <div class="rule"><b>3</b>Send a theme's gift to pick the next game</div>
     </div>`;
   setInstruction(`${S.queue.length} questions. Starting in`, 'wait');
@@ -621,7 +746,7 @@ function renderLive() {
 }
 function winnersHtml(n = 3) {
   return '<div class="winners">' + S.correct.slice(0, n).map((c, i) =>
-    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${esc(displayName(c.u))}${(S.streaks.get(c.u) || 0) >= 3 ? ` (${S.streaks.get(c.u)} in a row)` : ''}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
+    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${who(c.u)}${(S.streaks.get(c.u) || 0) >= 3 ? ` (${S.streaks.get(c.u)} in a row)` : ''}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
 }
 function renderReveal() {
   renderThemebar();
@@ -676,14 +801,132 @@ function renderRecap() {
   const st = S.stats, top = [...S.gameScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   let h = `<div class="prompt">${esc(S.theme)}: final scores</div>`;
   h += '<div class="recap-list winners" style="margin-top:26px">' + (top.length ? top.map(([u, v], i) =>
-    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${esc(displayName(u))}</span><span class="p">${fmt(v)}</span></div>`).join('')
+    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${who(u)}</span><span class="p">${fmt(v)}</span></div>`).join('')
     : '<div class="winner"><span class="u">No scores this game</span></div>') + '</div>';
   const facts = [`${fmt(st.answers)} answers from ${st.players.size} players`];
+  const bestTeam = [...S.gameTeams.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (bestTeam) facts.push(`Team of the game: ${TEAMS[bestTeam[0]][0]} +${fmt(bestTeam[1])}`);
   if (st.fastest) facts.push(`Fastest answer: ${displayName(st.fastest.u)} in ${st.fastest.s.toFixed(1)}s`);
   h += `<div class="ans-fact" style="margin-top:auto">${facts.map(esc).join('<br>')}</div>`;
   body().innerHTML = h;
   setInstruction('Next theme locks in', 'go');
   setEvent(top.length ? `<b>${esc(displayName(top[0][0]))}</b> wins game ${S.game}` : '');
+}
+// ------------------------------------------------------------------ recap cards for X and Bluesky
+// After every game: a square (1080x1080) and a wide (1200x675) PNG saved to the recap-cards folder.
+function wrapLines(ctx, text, maxW) {
+  const words = String(text).split(' '), lines = [];
+  let line = '';
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+function loadImg(file) {
+  return new Promise(res => {
+    if (!file) return res(null);
+    const i = new Image(); i.crossOrigin = 'anonymous';
+    const t = setTimeout(() => res(null), 5000);
+    i.onload = () => { clearTimeout(t); res(i); }; i.onerror = () => { clearTimeout(t); res(null); };
+    i.src = CFG.imgBase + encodeURIComponent(file);
+  });
+}
+function hardestQuestion() {
+  // a question only counts as "hard" if enough people tried it; fall back to anything people tried
+  const sorted = list => list.sort((a, b) => a.ratio - b.ratio || b.tried - a.tried)[0] || null;
+  const usable = S.qLog.filter(x => x.q.type !== 'closest');
+  return sorted(usable.filter(x => x.tried >= 3 || x.q.type === 'board')) || sorted(usable.filter(x => x.tried > 0));
+}
+async function makeRecapCards() {
+  const top = [...S.gameScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (!top.length) return;                          // nobody played: nothing worth posting
+  const hard = hardestQuestion();
+  const face = hard ? await loadImg(hard.q.revealImage || hard.q.image || (hard.q.sides && hard.q.sides[hard.q.correct] && hard.q.sides[hard.q.correct].img)) : null;
+  try { await document.fonts.ready; } catch (e) {}
+  const C = getComputedStyle(document.documentElement);
+  const col = n => C.getPropertyValue(n).trim();
+  const cond = '"Barlow Condensed", "Arial Narrow", Arial, sans-serif', bodyF = 'Barlow, Arial, sans-serif';
+  const gameNo = S.game, theme = S.theme;
+  const hardLine = !hard ? '' : hard.q.type === 'board'
+    ? `The hardest one of the game: chat found ${hard.got} of ${hard.q.slots.length}.`
+    : hard.got === 0 ? `The hardest one of the game: nobody in chat got it.`
+    : `The hardest one of the game: ${hard.got} of ${hard.tried} got it.`;
+  let answer = '';
+  if (hard) {
+    const q = hard.q;
+    if (q.type === 'board') answer = q.slots.slice(0, 3).map(s => s.name).join(', ') + (q.slots.length > 3 ? '...' : '');
+    else if (q.type === 'hl') answer = `${q.sides[q.correct].name} (${q.sides[q.correct].value}) over ${q.sides[1 - q.correct].name} (${q.sides[1 - q.correct].value})`;
+    else answer = q.answer;
+  }
+
+  const draw = (W, H, wide) => {
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const x = cv.getContext('2d');
+    x.fillStyle = col('--bg'); x.fillRect(0, 0, W, H);
+    // masthead
+    const mh = wide ? 96 : 120;
+    x.fillStyle = '#000'; x.fillRect(0, 0, W, mh);
+    x.fillStyle = col('--accent'); x.fillRect(0, mh, W, 8);
+    x.textBaseline = 'middle';
+    x.font = `800 ${wide ? 52 : 64}px ${cond}`; x.fillStyle = '#fff'; x.fillText('HOOPSHYPE', 56, mh / 2);
+    const w1 = x.measureText('HOOPSHYPE').width;
+    x.fillStyle = col('--accent'); x.fillRect(56 + w1 + 22, mh / 2 - 24, 5, 48);
+    x.fillText('NBA QUIZ', 56 + w1 + 50, mh / 2);
+    x.textBaseline = 'alphabetic';
+    // left block: game, winner, podium
+    const L = 56, leftW = wide ? 470 : W - 112;
+    let y = mh + (wide ? 90 : 110);
+    x.fillStyle = '#fff'; x.font = `800 ${wide ? 58 : 76}px ${cond}`;
+    wrapLines(x, `GAME ${gameNo}: ${theme.toUpperCase()}`, leftW).forEach(l => { x.fillText(l, L, y); y += wide ? 58 : 74; });
+    y += wide ? 14 : 18;
+    x.fillStyle = col('--gold'); x.font = `800 ${wide ? 46 : 58}px ${cond}`;
+    const tTag = P.teams[top[0][0]] ? ` (${P.teams[top[0][0]]})` : '';
+    wrapLines(x, `${displayName(top[0][0])}${tTag} wins with ${fmt(top[0][1])} points`, leftW).forEach(l => { x.fillText(l, L, y); y += wide ? 50 : 62; });
+    x.fillStyle = '#c9ccd3'; x.font = `600 ${wide ? 30 : 36}px ${bodyF}`;
+    top.slice(1).forEach(([u, v], i) => { y += 4; x.fillText(`${i + 2}. ${displayName(u)}: ${fmt(v)}`, L, y); y += wide ? 40 : 48; });
+    // white panel: the hardest question
+    if (hard) {
+      const px = wide ? 560 : 40, py = wide ? mh + 40 : Math.max(y + 30, 520), pw = wide ? W - 600 : W - 80;
+      const fs = wide ? 160 : 200;
+      const textW = pw - 64 - (face ? fs + 30 : 0);
+      // measure first so the white panel hugs its content instead of leaving a blank block
+      x.font = `800 ${wide ? 40 : 50}px ${cond}`; const pl = Math.min(4, wrapLines(x, hard.q.prompt, textW).length);
+      x.font = `800 ${wide ? 40 : 52}px ${cond}`; const al = Math.min(2, wrapLines(x, answer, pw - 64).length);
+      x.font = `600 ${wide ? 26 : 32}px ${bodyF}`; const hl = wrapLines(x, hardLine, pw - 64).length;
+      const textH = (wide ? 64 : 76) + pl * (wide ? 42 : 52);
+      const contentH = Math.max(textH + 12, face ? 32 + fs + 50 : 0) + al * (wide ? 44 : 56) + hl * (wide ? 38 : 44) + 30;
+      const maxH = wide ? H - mh - 140 : H - py - 120;
+      const ph = Math.min(maxH, contentH);
+      x.fillStyle = '#fff'; x.beginPath(); x.roundRect ? x.roundRect(px, py, pw, ph, 12) : x.rect(px, py, pw, ph); x.fill();
+      if (face) {
+        x.save(); x.beginPath(); x.arc(px + pw - 32 - fs / 2, py + 32 + fs / 2, fs / 2, 0, Math.PI * 2); x.clip();
+        x.fillStyle = col('--tint'); x.fill(); x.drawImage(face, px + pw - 32 - fs, py + 32, fs, fs); x.restore();
+      }
+      let ty = py + (wide ? 64 : 76);
+      x.fillStyle = col('--ink'); x.font = `800 ${wide ? 40 : 50}px ${cond}`;
+      wrapLines(x, hard.q.prompt, textW).slice(0, 4).forEach(l => { x.fillText(l, px + 32, ty); ty += wide ? 42 : 52; });
+      ty = Math.max(ty + 12, face ? py + 32 + fs + 50 : 0);
+      x.fillStyle = col('--green'); x.font = `800 ${wide ? 40 : 52}px ${cond}`;
+      wrapLines(x, answer, pw - 64).slice(0, 2).forEach(l => { x.fillText(l, px + 32, ty); ty += wide ? 44 : 56; });
+      x.fillStyle = col('--sub'); x.font = `600 ${wide ? 26 : 32}px ${bodyF}`;
+      wrapLines(x, hardLine, pw - 64).forEach(l => { ty += 6; x.fillText(l, px + 32, ty); ty += wide ? 32 : 38; });
+    }
+    // footer
+    x.fillStyle = col('--accent'); x.fillRect(0, H - (wide ? 70 : 84), W, wide ? 70 : 84);
+    x.fillStyle = '#fff'; x.font = `800 ${wide ? 36 : 42}px ${cond}`; x.textBaseline = 'middle';
+    x.fillText(`PLAY LIVE ON TIKTOK: @${(CFG.handle || 'hoopshype').toUpperCase()}`, 56, H - (wide ? 35 : 42));
+    return cv.toDataURL('image/png').split(',')[1];
+  };
+  const stamp = `${nightKey()}-${String(new Date().getHours()).padStart(2, '0')}${String(new Date().getMinutes()).padStart(2, '0')}`;
+  const base = `hoopshype-quiz-${stamp}-game-${gameNo}`;
+  for (const [suffix, W, H, wide] of [['square', 1080, 1080, false], ['wide', 1200, 675, true]]) {
+    try {
+      const png = draw(W, H, wide);
+      await fetch('/card' + (PRACTICE ? '?practice=1' : ''), { method: 'POST', body: JSON.stringify({ name: `${base}-${suffix}.png`, png }) });
+    } catch (e) { console.log('Recap card not saved', e); }
+  }
 }
 function renderVoteResult(theme, votes) {
   renderThemebar();
@@ -702,8 +945,11 @@ function renderBoards() {
     $(sel).innerHTML = rows.length ? rows.map(([u, v], i) => `<li><span class="u">${i + 1}. ${esc(displayName(u))}</span><span class="s">${fmt(v)}</span></li>`).join('')
       : '<li class="empty">Nobody yet</li>';
   };
-  fill('#lb-stream', [...S.streamScores.entries()].sort((a, b) => b[1] - a[1]));
-  fill('#lb-gift', [...S.gifters.entries()].sort((a, b) => b[1] - a[1]));
+  fill('#lb-week', Object.entries(thisWeek().scores).sort((a, b) => b[1] - a[1]));
+  fill('#lb-gift', Object.entries(P.gifters).sort((a, b) => b[1] - a[1]));
+  const teams = Object.entries(thisWeek().teams).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  $('#lb-team').innerHTML = teams.length ? teams.map(([t, v], i) => `<li><span class="u">${i + 1}. ${esc(TEAMS[t][0])}</span><span class="s">${fmt(v)}</span></li>`).join('')
+    : '<li class="empty">Type your team to join</li>';
 }
 function renderLikes() {
   const got = S.likes - S.likeBase;
@@ -747,6 +993,7 @@ function startPractice() {
   const say = (u, text) => onEvent({ kind: 'chat', user: u, nick: u, text });
   setInterval(() => {
     const u = rnd(bots), q = S.q;
+    if (!P.teams[u] && Math.random() < 0.3) return say(u, rnd(['LAL', 'Celtics', 'warriors', 'knicks', 'okc', 'go spurs', 'Heat']));
     if (S.phase !== 'question' || !q) { if (Math.random() < 0.3) say(u, rnd(['lets go', 'gg', 'next one', 'hi from Madrid'])); return; }
     const right = Math.random() < (skill[q.difficulty] || 0.35) * (0.4 + (now() - S.tStart) / S.dur);
     if (q.type === 'guess') say(u, right ? q.answer : rnd(['LeBron', 'Kobe Bryant', 'Tim Duncan', 'Chris Paul', 'idk']));
@@ -774,7 +1021,7 @@ window.addEventListener('keydown', e => {
   }
   if (k === 'b') { S.blitzQueued = CFG.blitzLength; addAlert('<b>BLITZ ROUND</b> coming up'); }
   if (k === 'm') muted = !muted;
-  if (k === 'r') { S.streamScores = new Map(); renderBoards(); }
+  if (k === 'r') { S.streamScores = new Map(); renderBoards(); }   // stream-only scores; weekly board and champions are untouched
 });
 
 // ------------------------------------------------------------------ boot
@@ -782,9 +1029,10 @@ async function boot() {
   fit(); window.addEventListener('resize', fit);
   try {
     const c = await fetch('config.json', { cache: 'no-store' });
-    if (c.ok) { const user = await c.json(); CFG = Object.assign({}, DEFAULTS, user.quiz || {}); }
+    if (c.ok) { const user = await c.json(); CFG = Object.assign({}, DEFAULTS, user.quiz || {}, { handle: String(user.tiktokUsername || 'hoopshype').replace(/^@/, '') }); }
   } catch (e) {}
   S.likeGoal = CFG.likeGoal;
+  await loadState();
   // Prefer the copy the weekly GitHub job keeps fresh; fall back to the one in this folder
   for (const src of [CFG.questionsUrl, 'data/questions.json'].filter(Boolean)) {
     try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { S.data = await r.json(); break; } } catch (e) {}
@@ -797,6 +1045,8 @@ async function boot() {
   startGame(params.get('theme') || 'Mixed');
 }
 boot();
+// Save standings when the window closes, so a quick restart doesn't lose the night
+window.addEventListener('beforeunload', () => { try { navigator.sendBeacon('/state' + (PRACTICE ? '?practice=1' : ''), JSON.stringify(P)); } catch (e) {} });
 // Test hooks: play one specific question, or end the current one
-window.HHQ = { onEvent, state: S, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
+window.HHQ = { onEvent, state: S, saved: P, renderBoards: () => { renderBoards(); renderThemebar(); }, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
 })();

@@ -24,7 +24,7 @@ body { font-family: var(--body); color: var(--white); -webkit-font-smoothing: an
 
 /* Masthead: sits just under TikTok's own top bar */
 #masthead { position: absolute; top: 150px; left: 0; right: 0; height: 96px; padding: 0 48px; display: flex; align-items: center; justify-content: space-between; border-bottom: 6px solid var(--accent); background: #000; }
-.wordmark { display: flex; align-items: center; gap: 22px; font-family: var(--cond); font-weight: 800; font-size: 58px; letter-spacing: 1px; line-height: 1; }
+.wordmark { flex: none; white-space: nowrap; display: flex; align-items: center; gap: 22px; font-family: var(--cond); font-weight: 800; font-size: 58px; letter-spacing: 1px; line-height: 1; }
 .wordmark .sep { width: 4px; height: 46px; background: var(--accent); }
 .wordmark .nq { color: var(--accent); }
 #gameno { font-family: var(--cond); font-weight: 700; font-size: 40px; letter-spacing: 1px; color: #c9ccd3; }
@@ -174,10 +174,10 @@ body { font-family: var(--body); color: var(--white); -webkit-font-smoothing: an
 .vc.lead { border-top-color: var(--accent); }
 
 /* Leaderboards */
-#tables { position: absolute; top: 1640px; left: 40px; right: 40px; height: 214px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+#tables { position: absolute; top: 1640px; left: 40px; right: 40px; height: 214px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
 .tbl ol { list-style: none; border-top: 2px solid var(--line-dark); }
 .tbl li { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--line-dark); font-size: 26px; font-weight: 600; }
-.tbl li .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 330px; }
+.tbl li .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .tbl li .s { font-family: var(--cond); font-weight: 800; font-size: 28px; }
 .tbl li.empty { color: #7b808c; }
 
@@ -185,3 +185,13 @@ body { font-family: var(--body); color: var(--white); -webkit-font-smoothing: an
 #likes { position: absolute; top: 1866px; left: 40px; right: 40px; height: 36px; background: var(--bg-2); overflow: hidden; border-radius: 6px; }
 #likefill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); transition: width .5s; }
 #liketext { position: absolute; inset: 0; display: grid; place-items: center; font-size: 22px; font-weight: 700; }
+
+/* Champion in the masthead, team tags next to names */
+#gameno .champ { color: var(--gold); }
+#gameno .champ b { color: var(--white); font-weight: 800; }
+#gameno { flex: 1; min-width: 0; margin-left: 30px; font-size: 34px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+#pips .gno { font-family: var(--cond); font-weight: 800; font-size: 30px; color: #c9ccd3; margin-right: 10px; letter-spacing: .5px; }
+#pips { align-items: center; }
+.team { font-family: var(--cond); font-weight: 800; font-size: .8em; color: var(--sub); letter-spacing: .5px; }
+#eventline .team { color: inherit; opacity: .75; }
+.side.right .team, .opt.right .team { color: inherit; }
