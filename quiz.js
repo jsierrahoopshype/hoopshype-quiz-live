@@ -3,17 +3,20 @@
    over /events, or from the built-in practice simulator when the page is opened with ?practice=1.
 
    Operator keys (click the quiz window first): N = skip question, P = pause/resume,
-   B = start a blitz round, M = sound on/off, R = reset stream scores. */
+   B = start a blitz round, M = sound on/off, L = next look, R = reset stream scores. */
 (() => {
 'use strict';
 
 // ------------------------------------------------------------------ config
 const DEFAULTS = {
   imgBase: 'https://jsierrahoopshype.github.io/nba-headshots/players/headshots/face-fill-320/',
+  // cut-out head-and-uniform photos, used by the looks that show players without a circle frame
+  cutBase: 'https://jsierrahoopshype.github.io/nba-headshots/players/headshots/head-uniform-480/',
+  layout: 'broadcast',                 // starting look; press L in the quiz window to switch (the choice is remembered)
   questionsUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/hoopshype-quiz-live/HEAD/data/questions.json',
   questionsPerGame: 8,
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
-  times: { guess: 45, mc: 20, tf: 14, hl: 15, battle: 18, board: 75, closest: 25, reveal: 8, intro: 7, recap: 10, voteResult: 6 },
+  times: { guess: 45, mc: 20, tf: 14, hl: 15, battle: 18, board: 75, closest: 25, reveal: 8, intro: 5, recap: 7, voteResult: 4 },
   blitzTimes: { guess: 25, mc: 10, tf: 8, hl: 8, battle: 10, board: 40, closest: 14 },
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
   afterFirstCorrect: 8,                // seconds left once somebody names the player
@@ -26,8 +29,32 @@ const DEFAULTS = {
   diffMix: { easy: 0.5, medium: 0.4, hard: 0.1 },
 };
 let CFG = DEFAULTS;
+
+// ------------------------------------------------------------------ looks
+// Press L in the quiz window to switch. The pick is saved in saved/quiz-settings.json, shared by practice and LIVE.
+// ?layout=matchup in the address previews one look without saving it.
+const LAYOUTS = {
+  broadcast: { name: 'Broadcast', cutouts: false },
+  matchup: { name: 'Matchup', cutouts: true },        // the new Player Comparison videos: indigo, Poppins, team colours, cut-outs
+  courtside: { name: 'Courtside', cutouts: false },
+  scoreboard: { name: 'Scoreboard', cutouts: true },
+};
+let LAYOUT = 'broadcast';
+// Team colours (the trade card's table, picked to read on dark backgrounds)
+const TEAM_COLORS = {
+  ATL: '#E03A3E', BOS: '#00A35C', BKN: '#A1A1A4', CHA: '#00A3B4', CHI: '#CE1141', CLE: '#FDBB30', DAL: '#0A7BD1', DEN: '#FEC524',
+  DET: '#C8102E', GSW: '#FFC72C', HOU: '#CE1141', IND: '#FDBB30', LAC: '#C8102E', LAL: '#FDB927', MEM: '#5D76A9', MIA: '#E0234E',
+  MIL: '#2E9E5B', MIN: '#3D8BD1', NOP: '#B4975A', NYK: '#F58426', OKC: '#007AC1', ORL: '#0077C0', PHI: '#006BB6', PHX: '#E56020',
+  POR: '#E03A3E', SAC: '#8A5CC2', SAS: '#C4CED4', TOR: '#CE1141', UTA: '#9B6BDF', WAS: '#E31837',
+};
+// Team logos in nba-headshots are filed by NBA team id
+const LOGO_BASE = 'https://jsierrahoopshype.github.io/nba-headshots/teams/logos/current/svg/';
+const TEAM_IDS = { ATL: 37, BOS: 38, CLE: 39, NOP: 40, CHI: 41, DAL: 42, DEN: 43, GSW: 44, HOU: 45, LAC: 46, LAL: 47, MIA: 48, MIL: 49, MIN: 50, BKN: 51,
+  NYK: 52, ORL: 53, IND: 54, PHI: 55, PHX: 56, POR: 57, SAC: 58, SAS: 59, OKC: 60, TOR: 61, UTA: 62, MEM: 63, WAS: 64, DET: 65, CHA: 66 };
+const logoUrl = code => `${LOGO_BASE}${1610612700 + TEAM_IDS[code]}.svg`;
 const params = new URLSearchParams(location.search);
 const PRACTICE = params.has('practice');
+const LAYOUT_PREVIEW = LAYOUTS[params.get('layout')] ? params.get('layout') : null;
 
 // ------------------------------------------------------------------ utils
 const $ = s => document.querySelector(s);
@@ -83,7 +110,18 @@ function parseNumber(text, q) {
   return v;
 }
 // Photo only when one exists: never an empty circle. A photo that fails to load removes its own frame.
-const photo = (f, cls = '') => f ? `<div class="photo ${cls}"><img src="${CFG.imgBase}${encodeURIComponent(f)}" alt="" onerror="this.parentNode.remove()"></div>` : '';
+// Looks with cut-outs (see LAYOUTS) show the head-and-uniform photo for big faces, falling back to the round face photo.
+const photo = (f, cls = '') => {
+  if (!f) return '';
+  const cut = LAYOUTS[LAYOUT] && LAYOUTS[LAYOUT].cutouts && cls !== 'xs';
+  const src = (cut ? CFG.cutBase : CFG.imgBase) + encodeURIComponent(f);
+  return `<div class="photo ${cls}${cut ? ' cut' : ''}"><img src="${src}" alt="" data-f="${esc(f)}" onerror="HHQphotoErr(this)"></div>`;
+};
+window.HHQphotoErr = img => {
+  const box = img.parentNode;
+  if (box.classList.contains('cut')) { box.classList.remove('cut'); img.src = CFG.imgBase + encodeURIComponent(img.dataset.f); }
+  else box.remove();
+};
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
 
 // ------------------------------------------------------------------ sound (simple WebAudio blips, no files)
@@ -125,7 +163,8 @@ const who = u => esc(displayName(u)) + (P.teams[u] ? ` <span class="team">${P.te
 // ------------------------------------------------------------------ standings that carry over between streams
 // Saved by the bridge to saved/hoopshype-quiz-state.json. A "night" is a US Eastern date that rolls over
 // at 6am ET, so a late game night stays one night. Weeks start Monday, so the weekly board resets on Mondays.
-const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {} };
+// log: every point scored in the last hour, as [unix seconds, user, points], for the rolling 15-minute and 1-hour boards
+const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [] };
 function etDate(d = new Date()) {
   const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   et.setHours(et.getHours() - 6);
@@ -152,7 +191,69 @@ function addPoints(u, pts) {
   w.scores[u] = (w.scores[u] || 0) + pts;
   const t = P.teams[u];
   if (t) { w.teams[t] = (w.teams[t] || 0) + pts; S.gameTeams.set(t, (S.gameTeams.get(t) || 0) + pts); }
+  P.log.push([Math.floor(now() / 1000), u, pts]);
+  pruneLog();
   saveSoon();
+}
+function pruneLog() {
+  const cut = Math.floor(now() / 1000) - 3600;
+  let i = 0; while (i < P.log.length && P.log[i][0] < cut) i++;
+  if (i) P.log.splice(0, i);
+}
+
+// ------------------------------------------------------------------ standings: last 15 minutes, last hour, tonight, this week
+// The 15-minute board is the one a new viewer can climb right away, so it leads the rotation and stays up longest.
+const WINDOWS = [
+  { key: 'm15', label: 'Last 15 min', short: '15 min', secs: 10 },
+  { key: 'h1', label: 'Last hour', short: 'hour', secs: 6 },
+  { key: 'night', label: 'Tonight', short: 'tonight', secs: 6 },
+  { key: 'week', label: 'This week', short: 'week', secs: 6 },
+];
+function scoresFor(key) {
+  if (key === 'night') return today().scores;
+  if (key === 'week') return thisWeek().scores;
+  const cut = Math.floor(now() / 1000) - (key === 'm15' ? 900 : 3600);
+  const m = {};
+  for (const [t, u, p] of P.log) if (t >= cut) m[u] = (m[u] || 0) + p;
+  return m;
+}
+const ranked = key => Object.entries(scoresFor(key)).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
+function rankOf(key, u) {
+  const list = ranked(key), i = list.findIndex(e => e[0] === u);
+  return i < 0 ? null : { pos: i + 1, pts: list[i][1], toTop10: i >= 10 ? list[9][1] - list[i][1] + 1 : 0, of: list.length };
+}
+// Personal rank: anyone can type RANK (or "my rank", "score", "me") to see their spot on all four boards
+const RANK_WORDS = new Set(['rank', 'my rank', 'ranking', 'score', 'my score', 'me', 'where am i', 'points', 'my points', 'stats', 'rango', 'puesto']);
+const rankAsked = new Map();
+const rankQ = [];
+let rankShowing = null, rankTimer = null;
+function askRank(u) {
+  if (now() - (rankAsked.get(u) || 0) < 20000) return;   // once every 20 seconds per person
+  rankAsked.set(u, now());
+  if (!rankQ.includes(u) && rankShowing !== u) rankQ.push(u);
+  if (rankQ.length > 4) rankQ.shift();
+  if (!rankTimer) nextRank();
+}
+function nextRank() {
+  rankShowing = rankQ.shift() || null;
+  renderMe();
+  renderStandings();
+  rankTimer = rankShowing ? setTimeout(nextRank, 4500) : null;
+}
+function rankLine(u) {
+  const parts = WINDOWS.map(w => { const r = rankOf(w.key, u); return `<span class="rk"><b>${r ? '#' + r.pos : '-'}</b> ${w.short}</span>`; });
+  const r15 = rankOf('m15', u);
+  const tail = !r15 ? 'Answer one to get on the board'
+    : r15.pos === 1 ? 'Top of the last 15 minutes'
+    : r15.pos <= 10 ? `${fmt(ranked('m15')[r15.pos - 2][1] - r15.pts + 1)} pts to move up`
+    : `${fmt(r15.toTop10)} pts to the Top 10`;
+  return `<span class="me-name">${who(u)}</span>${parts.join('')}<span class="me-tail">${tail}</span>`;
+}
+function renderMe() {
+  const el = $('#st-me');
+  if (!el) return;
+  el.classList.toggle('on', !!rankShowing);
+  el.innerHTML = rankShowing ? rankLine(rankShowing) : '<span>Type <b>RANK</b> in the chat to see your spot on all four boards</span>';
 }
 let saveTimer = null;
 function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 4000); }
@@ -160,6 +261,7 @@ async function saveNow() {
   // keep the file small: 3 weeks of nights, 8 weeks of weekly boards
   const dk = Object.keys(P.days).sort(); while (dk.length > 21) delete P.days[dk.shift()];
   const wk = Object.keys(P.weeks).sort(); while (wk.length > 8) delete P.weeks[wk.shift()];
+  pruneLog();
   const body = JSON.stringify(P);
   try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { method: 'POST', body }); if (!r.ok) throw 0; }
   catch (e) { store(PRACTICE ? 'hhq_state_practice' : 'hhq_state', P); }   // no bridge (e.g. opened from GitHub): keep it in the browser
@@ -168,7 +270,9 @@ async function loadState() {
   let saved = null;
   try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { cache: 'no-store' }); if (r.ok) saved = await r.json(); } catch (e) {}
   if (!saved || !Object.keys(saved).length) saved = store(PRACTICE ? 'hhq_state_practice' : 'hhq_state') || {};
-  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {} }, saved);
+  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [] }, saved);
+  if (!Array.isArray(P.log)) P.log = [];
+  pruneLog();
 }
 
 // The defending champion gets called out the first time they chat each night
@@ -406,6 +510,7 @@ function hintNow(by) {
 function onChat(u, text) {
   if (S.stats) S.stats.players.add(u);
   greetChampion(u);
+  if (RANK_WORDS.has(norm(text).replace(/^!/, ''))) return askRank(u);
   maybeJoinTeam(u, text);
   const q = S.q;
   if (S.phase !== 'question' || !q || S.paused) return;
@@ -498,6 +603,8 @@ function scoreClosest(q) {
   });
   S.closestRows = rows;
 }
+// ", now #4 in the last 15 min" after a correct answer
+function posNote(u) { const r = rankOf('m15', u); return r && r.pos <= 20 ? `, now #${r.pos} in the last 15 min` : ''; }
 function registerCorrect(u, pts, quiet) {
   addPoints(u, pts);
   S.streaks.set(u, (S.streaks.get(u) || 0) + 1);
@@ -506,8 +613,8 @@ function registerCorrect(u, pts, quiet) {
   if (S.correct.length === 1) {
     const secs = (now() - S.tStart) / 1000;
     if (!S.stats.fastest || secs < S.stats.fastest.s) S.stats.fastest = { u, s: secs };
-    if (!quiet) { sfx.correct(); setEvent(`<b>${who(u)}</b> got it first, +${pts}. Still time to answer`); }
-  } else if (!quiet) setEvent(`<b>${who(u)}</b> got it too, +${pts}. ${S.correct.length} correct so far`);
+    if (!quiet) { sfx.correct(); setEvent(`<b>${who(u)}</b> got it first, +${pts}${posNote(u)}. Still time to answer`); }
+  } else if (!quiet) setEvent(`<b>${who(u)}</b> got it too, +${pts}${posNote(u)}. ${S.correct.length} correct so far`);
   renderBoards();
 }
 
@@ -630,11 +737,12 @@ function renderIntro() {
   body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
     <div class="rules">
       <div class="rule"><b>1</b>Type your answer in the chat. Fastest scores most</div>
-      <div class="rule"><b>2</b>Type your team once (LAL, BOS, GSW...) to join the team battle</div>
-      <div class="rule"><b>3</b>Send a theme's gift to pick the next game</div>
+      <div class="rule"><b>2</b>Type RANK any time to see your spot</div>
+      <div class="rule"><b>3</b>Type your team once (LAL, BOS, GSW...) to join the team battle</div>
+      <div class="rule"><b>4</b>Send a theme's gift to pick the next game</div>
     </div>`;
   setInstruction(`${S.queue.length} questions. Starting in`, 'wait');
-  setEvent(S.game > 1 ? 'Scores for this game reset. The stream leaderboard keeps counting' : 'Welcome. No sign-up, just type in the chat');
+  setEvent(S.game > 1 ? 'New game. The 15-minute board keeps counting, so you can still climb it' : 'Welcome. No sign-up, just type in the chat');
   renderBoards();
 }
 function instructionFor(q) {
@@ -674,20 +782,32 @@ function renderQuestion(keepEvent) {
   body().innerHTML = h;
   renderLive();
 }
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const colorDist = (a, b) => Math.hypot(...hexRgb(a).map((v, i) => v - hexRgb(b)[i]));
+function sideColors(q) {
+  const teams = q.sides.map(s => S.data.teams && S.data.teams[s.img]);
+  const a = TEAM_COLORS[teams[0]] || '#8b7cf6';
+  let b = TEAM_COLORS[teams[1]] || '#c4b5fd';
+  if (colorDist(a, b) < 90) b = '#c4b5fd';
+  if (colorDist(a, b) < 90) b = '#ffffff';
+  return { teams, colors: [a, b] };
+}
 function vsHtml(q, reveal) {
   const t = S.battleVotes[0] + S.battleVotes[1];
+  const sc = sideColors(q);
   const sides = q.sides.map((s, i) => {
     let cls = '';
     if (reveal && q.type === 'hl') cls = i === q.correct ? ' right' : ' fade';
     if (reveal && q.type === 'battle' && S.battleWin >= 0) cls = i === S.battleWin ? ' right' : ' fade';
     const val = q.type === 'hl' ? `<div class="val${reveal ? '' : ' hide'}">${reveal ? esc(s.value) : '?'}</div>` : '';
     const meta = q.type === 'battle' ? `<div class="meta">${esc(s.value || '')}</div>` : '';
-    return `<div class="side${cls}"><div class="k">${'AB'[i]}</div>${photo(s.img)}<div class="nm">${esc(s.name)}</div>${val}${meta}</div>`;
+    const tm = sc.teams[i] ? `<div class="tm"><img src="${logoUrl(sc.teams[i])}" alt="" onerror="this.remove()">${esc(TEAMS[sc.teams[i]][0])}</div>` : '';
+    return `<div class="side${cls}" style="--tc:${sc.colors[i]}"><div class="k">${'AB'[i]}</div>${photo(s.img)}${tm}<div class="nm">${esc(s.name)}</div>${val}${meta}</div>`;
   }).join('');
   let split = '';
   if (q.type === 'battle') {
     const pa = t ? Math.round(100 * S.battleVotes[0] / t) : 50;
-    split = `<div class="split"><div class="a" id="split-a" style="width:${pa}%">A ${t ? pa + '%' : ''}</div><div class="b" id="split-b">${t ? (100 - pa) + '%' : ''} B</div></div>`;
+    split = `<div class="split" style="--ta:${sc.colors[0]};--tb:${sc.colors[1]}"><div class="a" id="split-a" style="width:${pa}%">A ${t ? pa + '%' : ''}</div><div class="b" id="split-b">${t ? (100 - pa) + '%' : ''} B</div></div>`;
   }
   return `<div class="vs">${sides}</div>${split}`;
 }
@@ -746,7 +866,7 @@ function renderLive() {
 }
 function winnersHtml(n = 3) {
   return '<div class="winners">' + S.correct.slice(0, n).map((c, i) =>
-    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${who(c.u)}${(S.streaks.get(c.u) || 0) >= 3 ? ` (${S.streaks.get(c.u)} in a row)` : ''}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
+    `<div class="winner"><span class="r">${i + 1}</span><span class="u">${who(c.u)}${(S.streaks.get(c.u) || 0) >= 3 ? ` (${S.streaks.get(c.u)} in a row)` : ''}</span><span class="pos">${(r => r ? '#' + r.pos + ' last 15 min' : '')(rankOf('m15', c.u))}</span><span class="p">+${c.pts}</span></div>`).join('') + '</div>';
 }
 function renderReveal() {
   renderThemebar();
@@ -929,6 +1049,7 @@ async function makeRecapCards() {
   }
 }
 function renderVoteResult(theme, votes) {
+  S.lastVoteResult = [theme, votes];
   renderThemebar();
   body().innerHTML = `<div class="big-center"><div class="title">${esc(theme)}</div><div class="desc">${esc(THEME_DESC[theme] || '')}</div></div>`;
   setInstruction(`Up next: ${theme}`, 'wait');
@@ -939,17 +1060,33 @@ function renderVote() {
   $('#vote-cols').innerHTML = S.voteThemes.map((t, i) => `<div class="vc${max > 0 && S.votes[i] === max ? ' lead' : ''}">
     <div class="top"><span class="gift">${esc(CFG.themeGifts[i] || '')}</span><span class="n">${S.votes[i]}</span></div><div class="th">${esc(t)}</div></div>`).join('');
 }
+let winIdx = 0, winSince = 0;
+function rotateStandings() {
+  if (now() - winSince < WINDOWS[winIdx].secs * 1000) return;
+  winIdx = (winIdx + 1) % WINDOWS.length; winSince = now();
+  renderStandings();
+}
+function renderStandings() {
+  const w = WINDOWS[winIdx];
+  $('#st-tabs').innerHTML = WINDOWS.map((x, i) => `<span class="tab${i === winIdx ? ' on' : ''}">${x.label}</span>`).join('');
+  const rows = ranked(w.key).slice(0, 10);
+  const cells = [];
+  for (let i = 0; i < 10; i++) {
+    const r = rows[i];
+    cells.push(r ? `<li class="${r[0] === rankShowing ? 'hl' : ''}"><span class="n">${i + 1}</span><span class="u">${who(r[0])}</span><span class="s">${fmt(r[1])}</span></li>`
+      : `<li class="open"><span class="n">${i + 1}</span><span class="u">${i === rows.length ? 'Open spot' : ''}</span><span class="s"></span></li>`);
+  }
+  $('#st-list').innerHTML = cells.join('');
+}
 function renderBoards() {
-  const fill = (sel, entries) => {
-    const rows = entries.slice(0, 4);
-    $(sel).innerHTML = rows.length ? rows.map(([u, v], i) => `<li><span class="u">${i + 1}. ${esc(displayName(u))}</span><span class="s">${fmt(v)}</span></li>`).join('')
-      : '<li class="empty">Nobody yet</li>';
-  };
-  fill('#lb-week', Object.entries(thisWeek().scores).sort((a, b) => b[1] - a[1]));
-  fill('#lb-gift', Object.entries(P.gifters).sort((a, b) => b[1] - a[1]));
-  const teams = Object.entries(thisWeek().teams).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  $('#lb-team').innerHTML = teams.length ? teams.map(([t, v], i) => `<li><span class="u">${i + 1}. ${esc(TEAMS[t][0])}</span><span class="s">${fmt(v)}</span></li>`).join('')
-    : '<li class="empty">Type your team to join</li>';
+  renderStandings();
+  renderMe();
+  const teams = Object.entries(thisWeek().teams).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  $('#lb-team').innerHTML = teams.length ? teams.map(([t, v], i) => `<span class="it"><b>${i + 1}</b> ${esc(TEAMS[t][0])} <em>${fmt(v)}</em></span>`).join('')
+    : '<span class="it">Type your team (LAL, BOS, GSW...) to join</span>';
+  const gifts = Object.entries(P.gifters).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  $('#lb-gift').innerHTML = gifts.length ? gifts.map(([u, v], i) => `<span class="it"><b>${i + 1}</b> ${esc(displayName(u))} <em>${fmt(v)}</em></span>`).join('')
+    : '<span class="it">Every gift coin is 10 points</span>';
 }
 function renderLikes() {
   const got = S.likes - S.likeBase;
@@ -1010,6 +1147,25 @@ function startPractice() {
   }, 2500);
 }
 
+function applyLayout(name, save) {
+  LAYOUT = LAYOUTS[name] ? name : 'broadcast';
+  document.body.dataset.layout = LAYOUT;
+  if (save) fetch('/settings', { method: 'POST', body: JSON.stringify({ layout: LAYOUT }) }).catch(() => store('hhq_layout', LAYOUT));
+  // redraw what's on screen so photos switch between cut-outs and circles
+  if (!S.data) return;
+  if (S.phase === 'question') renderQuestion(true);
+  else if (S.phase === 'reveal') renderReveal();
+  else if (S.phase === 'intro') renderIntro();
+  else if (S.phase === 'recap') renderRecap();
+  else if (S.phase === 'voteResult' && S.lastVoteResult) renderVoteResult(...S.lastVoteResult);
+}
+async function loadLayout() {
+  if (LAYOUT_PREVIEW) return applyLayout(LAYOUT_PREVIEW);
+  let saved = null;
+  try { const r = await fetch('/settings', { cache: 'no-store' }); if (r.ok) saved = (await r.json()).layout; } catch (e) {}
+  applyLayout(saved || store('hhq_layout') || CFG.layout);
+}
+
 // ------------------------------------------------------------------ operator keys
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
@@ -1021,6 +1177,11 @@ window.addEventListener('keydown', e => {
   }
   if (k === 'b') { S.blitzQueued = CFG.blitzLength; addAlert('<b>BLITZ ROUND</b> coming up'); }
   if (k === 'm') muted = !muted;
+  if (k === 'l') {   // next look
+    const names = Object.keys(LAYOUTS);
+    applyLayout(names[(names.indexOf(LAYOUT) + 1) % names.length], true);
+    addAlert(`Look: <b>${LAYOUTS[LAYOUT].name}</b>. Press L for the next one`);
+  }
   if (k === 'r') { S.streamScores = new Map(); renderBoards(); }   // stream-only scores; weekly board and champions are untouched
 });
 
@@ -1032,6 +1193,7 @@ async function boot() {
     if (c.ok) { const user = await c.json(); CFG = Object.assign({}, DEFAULTS, user.quiz || {}, { handle: String(user.tiktokUsername || 'hoopshype').replace(/^@/, '') }); }
   } catch (e) {}
   S.likeGoal = CFG.likeGoal;
+  await loadLayout();
   await loadState();
   // Prefer the copy the weekly GitHub job keeps fresh; fall back to the one in this folder
   for (const src of [CFG.questionsUrl, 'data/questions.json'].filter(Boolean)) {
@@ -1041,6 +1203,8 @@ async function boot() {
   S.themes = S.data.themes.slice();
   renderLikes(); renderBoards();
   setInterval(tick, 200);
+  setInterval(rotateStandings, 500);
+  setInterval(() => { renderStandings(); if (rankShowing) renderMe(); }, 15000);   // rolling windows drop old points even when nobody scores
   if (PRACTICE) startPractice(); else connectBridge();
   startGame(params.get('theme') || 'Mixed');
 }

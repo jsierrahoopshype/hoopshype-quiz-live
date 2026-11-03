@@ -29,6 +29,14 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 
 Themes: Career Paths, Stat Lines, Draft & Bio, Awards & Rings, Record Book, Money Talks, Jersey Kings, Around the World, Name the Face, Franchise Legends, plus Mixed.
 
+## Looks
+
+Four looks, same screen layout: **Broadcast** (black and white, HoopsHype orange), **Matchup** (the new Player Comparison videos: indigo, Poppins, team colours, cut-out photos), **Courtside** (light newsprint) and **Scoreboard** (arena scoreboard, gold and navy). Click the quiz window and press **L** to switch. The pick is saved in `saved/quiz-settings.json` and used by both practice and LIVE.
+
+## Standings
+
+The Top 10 rotates through **Last 15 min**, **Last hour**, **Tonight** and **This week**. The 15-minute board stays up longest, so a new viewer can climb it within a few minutes. Anyone can type **RANK** in the chat to see their spot on all four boards and how many points they need to move up.
+
 ## Coming-back features
 
 - **Last night's champion** shows in the header all night. A "night" is a US Eastern date that rolls over at 6am ET. When the champion first chats, the quiz calls them out.
@@ -47,7 +55,7 @@ Themes: Career Paths, Stat Lines, Draft & Bio, Awards & Rings, Record Book, Mone
 
 ## Operator keys (click the quiz window first)
 
-N = skip question · P = pause/resume · B = blitz round now · M = sound on/off · R = reset stream scores
+N = skip question · P = pause/resume · B = blitz round now · M = sound on/off · L = next look · R = reset stream scores
 
 ## Data sources
 

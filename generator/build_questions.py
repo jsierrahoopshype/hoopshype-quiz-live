@@ -860,18 +860,38 @@ def main():
     gen_franchise(bank, PL)
     gen_battles(bank, PL, famous)
 
+    # team colours for the looks that show them: photo file -> franchise code
+    # (active players: their current team; retired players: the team they played the most seasons for)
+    used_imgs = set()
+    for q in bank.qs:
+        for k in ("image", "revealImage"):
+            if q.get(k): used_imgs.add(q[k])
+        for side in q.get("sides", []) + q.get("slots", []):
+            if side.get("img"): used_imgs.add(side["img"])
+    teams = {}
+    for pl in PL.values():
+        if pl.img not in used_imgs or not pl.seasons:
+            continue
+        if pl.active:
+            code = pl.seasons[-1]["team"]
+        else:
+            cnt = collections.Counter(s["team"] for s in pl.seasons)
+            code = max(cnt, key=lambda t: (cnt[t], max(s["y"] for s in pl.seasons if s["team"] == t)))
+        if code in NICK:
+            teams[pl.img] = code
     # every themed game also needs names chat can type for any player (letter reveal of mc answers etc.)
     out = {
         "generated": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
         "themes": THEMES,
         "count": len(bank.qs),
         "questions": bank.qs,
+        "teams": dict(sorted(teams.items())),
     }
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     # only rewrite when the questions themselves changed, so the weekly job doesn't commit noise
     try:
         old = json.load(open(a.out, encoding="utf-8"))
-        if old.get("questions") == out["questions"]:
+        if old.get("questions") == out["questions"] and old.get("teams") == out["teams"]:
             print("Questions unchanged, file left as is")
             return
     except Exception:

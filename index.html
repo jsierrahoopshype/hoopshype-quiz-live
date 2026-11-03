@@ -8,9 +8,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- Poppins for the Matchup look, the same files as the Player Comparison generator (fonts/poppins, OFL) -->
+<style>
+@font-face { font-family: "Poppins"; font-weight: 600; src: url(fonts/poppins/poppins-600.woff2) format("woff2"); font-display: swap; }
+@font-face { font-family: "Poppins"; font-weight: 700; src: url(fonts/poppins/poppins-700.woff2) format("woff2"); font-display: swap; }
+</style>
 <link rel="stylesheet" href="quiz.css">
 </head>
-<body>
+<body data-layout="broadcast">
 <!-- Fixed 1080x1920 portrait canvas (TikTok LIVE), scaled to fit the window -->
 <div id="stage">
   <header id="masthead">
@@ -36,10 +41,15 @@
     <div id="vote-cols"></div>
   </section>
 
-  <section id="tables">
-    <div class="tbl"><div class="sec-title">This week</div><ol id="lb-week"></ol></div>
-    <div class="tbl"><div class="sec-title">Team battle</div><ol id="lb-team"></ol></div>
-    <div class="tbl"><div class="sec-title">Top supporters</div><ol id="lb-gift"></ol></div>
+  <section id="standings">
+    <div id="st-tabs"></div>
+    <ol id="st-list"></ol>
+    <div id="st-me"></div>
+  </section>
+
+  <section id="strips">
+    <div class="strip"><span class="lab">Team battle</span><span class="items" id="lb-team"></span></div>
+    <div class="strip"><span class="lab">Top supporters</span><span class="items" id="lb-gift"></span></div>
   </section>
 
   <footer id="likes">

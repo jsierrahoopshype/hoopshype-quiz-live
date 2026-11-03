@@ -13,6 +13,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 const PORT = cfg.port || 8787;
 const log = (...a) => console.log(new Date().toLocaleTimeString(), ...a);
+// PRACTICE-HOOPSHYPE-QUIZ.bat starts the bridge with "practice": fake chat only, no TikTok connection
+const PRACTICE = process.argv.slice(2).includes('practice');
 
 // ------------------------------------------------------------------ web server + event stream
 const clients = new Set();
@@ -32,6 +34,8 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const STATE_DIR = path.join(ROOT, 'saved');
 const CARD_DIR = path.join(ROOT, 'recap-cards');
 fs.mkdirSync(STATE_DIR, { recursive: true });
+// Look settings (which layout) are shared by practice and live, so a look picked in practice is used on the LIVE
+const settingsFile = path.join(STATE_DIR, 'quiz-settings.json');
 const stateFile = practice => path.join(STATE_DIR, practice ? 'practice-state.json' : 'hoopshype-quiz-state.json');
 function readBody(req, limit, cb) {
   const chunks = []; let size = 0;
@@ -55,6 +59,16 @@ http.createServer((req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(fs.existsSync(file) ? fs.readFileSync(file) : '{}');
+  }
+  if (url.pathname === '/settings') {
+    if (req.method === 'POST') {
+      return readBody(req, 1e5, body => {
+        try { JSON.parse(body); fs.writeFileSync(settingsFile, body); res.writeHead(204); res.end(); }
+        catch (e) { res.writeHead(400); res.end(); }
+      });
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile) : '{}');
   }
   if (url.pathname === '/card' && req.method === 'POST') {
     // Recap card PNG from the quiz page: { name, png (base64) }
@@ -89,7 +103,8 @@ http.createServer((req, res) => {
   });
 }).listen(PORT, '127.0.0.1', () => {
   log(`Quiz page ready at http://localhost:${PORT}`);
-  log(`Practice mode (fake chat, no TikTok needed): http://localhost:${PORT}/?practice=1`);
+  if (PRACTICE) log('Practice mode: fake chat, gifts and likes. Not connecting to TikTok.');
+  else log(`Practice mode (fake chat, no TikTok needed): http://localhost:${PORT}/?practice=1`);
 });
 setInterval(() => { for (const res of clients) res.write(': keep-alive\n\n'); }, 20000);
 
@@ -98,6 +113,8 @@ async function startTikTok() {
   const user = String(cfg.tiktokUsername || '').replace(/^@/, '').trim();
   if (!user) { log('No tiktokUsername in config.json, TikTok chat is off.'); return; }
   const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await import('tiktok-live-connector');
+  log(`Watching the TikTok account @${user}. Chat connects by itself once that account goes LIVE.`);
+  let offlineLogged = 0;
   const seenGifts = new Set();
   let conn = null, retryTimer = null;
 
@@ -127,7 +144,10 @@ async function startTikTok() {
     conn.on(WebcastEvent.ROOM_USER, d => send({ kind: 'viewers', n: d.viewerCount }));
     conn.on(WebcastEvent.STREAM_END, () => { log('The LIVE ended.'); status(false, 'The LIVE has ended'); retry(30); });
     conn.on(ControlEvent.DISCONNECTED, () => { log('Disconnected from TikTok.'); status(false, 'Reconnecting to chat...'); retry(15); });
-    conn.on(ControlEvent.ERROR, e => log('TikTok error:', (e && (e.message || e.info)) || e));
+    conn.on(ControlEvent.ERROR, e => {
+      const m = String((e && (e.message || e.info)) || e);
+      if (!/Room ID|Error while connecting|offline/i.test(m)) log('TikTok error:', m);   // "not LIVE yet" is reported once below
+    });
 
     try {
       const st = await conn.connect();
@@ -135,14 +155,22 @@ async function startTikTok() {
       status(true, 'Connected');
     } catch (e) {
       const msg = (e && e.message) || String(e);
-      if (/offline|not live|LIVE has ended|UserOffline/i.test(msg) || (e && e.constructor && e.constructor.name === 'UserOfflineError')) {
-        log(`@${user} is not LIVE yet. Checking again in 20 seconds...`);
+      // "Failed to retrieve Room ID" is what TikTok answers when the account has no LIVE running right now
+      const offline = /offline|not live|LIVE has ended|Room ID/i.test(msg) || (e && e.constructor && /UserOffline/.test(e.constructor.name));
+      if (offline) {
+        // say it plainly once, then only every 5 minutes, instead of an error every 20 seconds
+        if (Date.now() - offlineLogged > 5 * 60 * 1000) {
+          offlineLogged = Date.now();
+          log(`@${user} is not LIVE right now. This is normal before you go LIVE: the quiz keeps checking every 20 seconds and connects by itself.`);
+          log(`If you ARE live and this keeps showing, the username in config.json is wrong (it says "${user}").`);
+        }
         status(false, 'Waiting for the TikTok LIVE to start...');
+        retry(20);
       } else {
         log('Could not connect to TikTok yet:', msg, '. Retrying in 30 seconds.');
         status(false, 'Connecting to chat...');
+        retry(30);
       }
-      retry(/offline|not live/i.test(msg) ? 20 : 30);
     }
   };
   const retry = secs => {
@@ -183,5 +211,7 @@ async function startYouTube() {
   run();
 }
 
-startTikTok().catch(e => log('TikTok module failed to load:', e.message, '. Run INSTALL-HOOPSHYPE-QUIZ.bat first.'));
-startYouTube();
+if (!PRACTICE) {
+  startTikTok().catch(e => log('TikTok chat reader failed to load:', e.message, '. Delete the node_modules folder and double-click START-HOOPSHYPE-QUIZ.bat again.'));
+  startYouTube();
+}

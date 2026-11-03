@@ -33,5 +33,5 @@ echo.
 echo The quiz window is open. In TikTok LIVE Studio, add a Window Capture of "HoopsHype NBA Quiz Live".
 echo Closing this black window stops the chat connection.
 echo.
-node bridge\quiz-bridge.mjs
+node bridge\quiz-bridge.mjs %~1
 pause
