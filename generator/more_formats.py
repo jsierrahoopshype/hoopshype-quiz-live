@@ -771,13 +771,22 @@ ESPN_ABBR = {"GS": "GSW", "NO": "NOP", "NY": "NYK", "SA": "SAS", "UTAH": "UTA", 
 
 @safe
 def gen_last_night(bank, PL, src):
-    day = et_today() - datetime.timedelta(days=1)
-    dest = _path(src, f"espn/scoreboard-{day:%Y%m%d}.json")
-    if not os.path.exists(dest) and os.environ.get("QUIZ_FETCH_ESPN") == "1":
-        _fetch(ESPN.format(f"{day:%Y%m%d}"), dest)
-    sb = _load_json(src, f"espn/scoreboard-{day:%Y%m%d}.json")
+    # last night, or the most recent night with games in the last 3 days (no games on Election Day, All-Star break...)
+    sb = None
+    for back in (1, 2, 3):
+        day = et_today() - datetime.timedelta(days=back)
+        dest = _path(src, f"espn/scoreboard-{day:%Y%m%d}.json")
+        if not os.path.exists(dest) and os.environ.get("QUIZ_FETCH_ESPN") == "1":
+            _fetch(ESPN.format(f"{day:%Y%m%d}"), dest)
+        if os.path.exists(dest):
+            j = json.load(open(dest, encoding="utf-8"))
+            if any((e.get("status", {}).get("type", {}) or {}).get("completed") for e in j.get("events", [])):
+                sb = j
+                break
     if not sb:
+        print("  (no finished games in the last 3 nights)")
         return
+    when = "last night" if back == 1 else f"on {day:%A} night"
     today = et_today().isoformat()
     evs = sb.get("events", [])
     done = [e for e in evs if (e.get("status", {}).get("type", {}) or {}).get("completed")]
@@ -815,10 +824,10 @@ def gen_last_night(bank, PL, src):
             onick = B.NICK.get(opp[0], opp[0])
             mine = B.to_int(c.get("score"))
             res = "beat" if mine > opp[1] else "lost to"
-            clues = [f"Last night: {nick} {res} the {onick}, {mine}-{opp[1]}", f"He scored {top.get('displayValue')} points",
+            clues = [f"{when[0].upper() + when[1:]}: {nick} {res} the {onick}, {mine}-{opp[1]}", f"He scored {top.get('displayValue')} points",
                      f"Team: {FULL[code]}"]
             before = len(bank.qs)
-            B.guess(bank, "Tonight in the NBA", "medium", f"Who led the {nick} in scoring last night?", p, clues, B.players_by_key_all,
+            B.guess(bank, "Tonight in the NBA", "medium", f"Who led the {nick} in scoring {when}?", p, clues, B.players_by_key_all,
                     fact=f"{name}: {top.get('displayValue')} points vs. the {onick}")
             if len(bank.qs) > before:
                 bank.qs[-1]["validOn"] = today
