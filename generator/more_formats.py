@@ -793,6 +793,167 @@ def gen_last_night(bank, PL, src):
                 bank.qs[-1]["validOn"] = today
 
 
+# =====================================================================================
+# This season (2026-27 so far) and last season (2025-26): today's players, not history
+# =====================================================================================
+EAST = {"ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"}
+
+
+def _close(av, bv, ratio=0.85):
+    lo, hi = sorted((abs(av), abs(bv)))
+    return hi > 0 and lo / hi >= ratio and av != bv
+
+
+def _season_lines(PL, y):
+    """{player: dict(gp, team, PTS, REB, AST, STL, BLK, 3PM per game)} for season y, trades combined."""
+    out = {}
+    for p in PL.values():
+        rows = [s for s in p.seasons if s["y"] == y]
+        if not rows:
+            continue
+        gp = sum(s["gp"] for s in rows)
+        if not gp:
+            continue
+        line = {"gp": gp, "team": rows[-1]["team"], "p": p}
+        for k in B.STAT_ORDER:
+            line[k] = sum(s[k] for s in rows) / gp
+        out[p.name] = line
+    return out
+
+
+@safe
+def gen_this_season(bank, PL, famous, src):
+    today = et_today().isoformat()
+    y = B.CURRENT_END_YEAR
+    lines = _season_lines(PL, y)
+    if not lines:
+        print("  (no 2026-27 stats yet)")
+        return
+    max_gp = max(l["gp"] for l in lines.values())
+    qual = {n: l for n, l in lines.items() if l["gp"] >= max(3, round(max_gp * 0.6)) and B.okp(l["p"])}
+    rnd = bank.rnd
+    made_before = len(bank.qs)
+    def dated(fn, *a, **k):
+        before = len(bank.qs)
+        fn(*a, **k)
+        for q in bank.qs[before:]:
+            q["validOn"] = today
+            q["cur"] = 1
+    stat_words = [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists"), ("STL", "steals"), ("BLK", "blocks"), ("3PM", "3-pointers")]
+    # league leaders
+    for code, word in stat_words:
+        top = sorted(qual.values(), key=lambda l: -l[code])[:8]
+        if len(top) >= 4:
+            dated(B.mc, bank, "This Season", "medium", f"Who leads the NBA in {word} per game this season?", top[0]["p"].name,
+                  [l["p"].name for l in top[1:4]], fact=f"{top[0]['p'].name}: {top[0][code]:.1f} {word} per game")
+    # team leaders: the options are his own teammates
+    by_team = collections.defaultdict(list)
+    for l in qual.values():
+        by_team[l["team"]].append(l)
+    for team, ls in by_team.items():
+        nick = B.NICK.get(team)
+        if not nick or len(ls) < 4:
+            continue
+        for code, word in stat_words[:3]:
+            top = sorted(ls, key=lambda l: -l[code])
+            if top[0][code] - top[1][code] < 0.3:
+                continue
+            dated(B.mc, bank, "This Season", "medium", f"Who leads the {nick} in {word} per game this season?", top[0]["p"].name,
+                  [l["p"].name for l in top[1:4]], fact=f"{top[0]['p'].name}: {top[0][code]:.1f} {word} per game")
+    # head-to-head stat races between players at the same level
+    for code, word, floor in (("PTS", "points", 14), ("REB", "rebounds", 6), ("AST", "assists", 4.5), ("3PM", "3-pointers", 2)):
+        pool = [l for l in qual.values() if l[code] >= floor]
+        for _ in range(160):
+            if len(pool) < 2:
+                break
+            a, b = rnd.sample(pool, 2)
+            if not _close(a[code], b[code], 0.88):
+                continue
+            dated(B.hl, bank, "This Season", "medium", f"Who is averaging more {word} this season?", a["p"], round(a[code], 1),
+                  b["p"], round(b[code], 1), lambda v: f"{v:.1f} per game")
+    # how many is he averaging (stars only)
+    stars = sorted(qual.values(), key=lambda l: -l["PTS"])[:40]
+    for l in stars:
+        dated(B.closest, bank, "This Season", "hard", f"How many points per game is {l['p'].name} averaging this season?",
+              round(l["PTS"], 1), lambda v: f"{v:.1f}", sub="Closest answer wins", p=l["p"])
+    # standings right now
+    st = _load_json(src, "nba-alt-standings/data/standings.json")
+    teams = (st or {}).get("teams") or {}
+    rec = {t: (v["w"], v["l"]) for t, v in teams.items() if t in B.NICK and v.get("gp")}
+    if len(rec) >= 20:
+        pct = {t: w / (w + l) for t, (w, l) in rec.items()}
+        for conf, members in (("East", EAST), ("West", set(B.NICK) - EAST)):
+            order = sorted([t for t in members if t in pct], key=lambda t: -pct[t])
+            if len(order) >= 4 and pct[order[0]] > pct[order[1]]:
+                dated(B.mc, bank, "This Season", "medium", f"Which team has the best record in the {conf} right now?",
+                      FULL[order[0]], [FULL[t] for t in order[1:4]], fact=f"{FULL[order[0]]}: {rec[order[0]][0]}-{rec[order[0]][1]}")
+        ts = list(pct)
+        for _ in range(200):
+            a, b = rnd.sample(ts, 2)
+            if pct[a] == pct[b] or abs(pct[a] - pct[b]) > 0.2:
+                continue
+            q = {"type": "hl", "theme": "This Season", "difficulty": "medium", "prompt": "Which team has the better record right now?",
+                 "sides": [{"name": FULL[t], "img": None, "logo": t, "value": f"{rec[t][0]}-{rec[t][1]}"} for t in (a, b)],
+                 "correct": 0 if pct[a] > pct[b] else 1, "answer": FULL[a] if pct[a] > pct[b] else FULL[b],
+                 "validOn": today, "cur": 1}
+            bank.add(q)
+    print(f"    this season: {len(bank.qs) - made_before} questions ({len(qual)} qualified players, {max_gp} games max)")
+
+
+@safe
+def gen_last_season(bank, PL, famous):
+    """2025-26 for players who are still in the league."""
+    y = B.CURRENT_END_YEAR - 1
+    lines = {n: l for n, l in _season_lines(PL, y).items() if l["p"].active and l["gp"] >= 40 and B.okp(l["p"])}
+    rnd = bank.rnd
+    for code, word, floor in (("PTS", "points", 15), ("REB", "rebounds", 6), ("AST", "assists", 4.5), ("BLK", "blocks", 1), ("3PM", "3-pointers", 2)):
+        pool = [l for l in lines.values() if l[code] >= floor]
+        for _ in range(120):
+            if len(pool) < 2:
+                break
+            a, b = rnd.sample(pool, 2)
+            if _close(a[code], b[code], 0.88):
+                B.hl(bank, "Last Season", "medium", f"Who averaged more {word} in 2025-26?", a["p"], round(a[code], 1), b["p"],
+                     round(b[code], 1), lambda v: f"{v:.1f} per game")
+        top = sorted(lines.values(), key=lambda l: -l[code])[:8]
+        if len(top) >= 4:
+            B.mc(bank, "Last Season", "medium", f"Who led the NBA in {word} per game in 2025-26?", top[0]["p"].name,
+                 [l["p"].name for l in top[1:4]], fact=f"{top[0]['p'].name}: {top[0][code]:.1f} per game")
+    winners = collections.defaultdict(list)
+    for p in PL.values():
+        for a, yy, _ in p.awards:
+            if yy == y:
+                winners[a].append(p)
+    cands = sorted(lines.values(), key=lambda l: -(l["PTS"] + l["REB"] + l["AST"]))
+    for award in ("Most Valuable Player", "Defensive Player of the Year", "Rookie of the Year", "Sixth Man of the Year",
+                  "Most Improved Player", "Clutch Player of the Year", "Finals MVP"):
+        w = winners.get(award) or []
+        if len(w) != 1:
+            continue
+        pool = [l["p"].name for l in cands[:40] if l["p"].name != w[0].name]
+        B.mc(bank, "Last Season", "medium", f"Who won {award} in 2025-26?", w[0].name, rnd.sample(pool[:12], 3))
+    for q in bank.qs:
+        if q["theme"] == "Last Season":
+            q["cur"] = 1
+
+
+def tag_current(bank):
+    """cur=1 on questions about today's players and this season, so the quiz can lean on them."""
+    for q in bank.qs:
+        if q.get("cur") or q.get("validOn") or q["theme"] in ("Tonight in the NBA", "This Season", "Last Season"):
+            q["cur"] = 1
+            continue
+        if re.search(r"20(2[5-9])", q.get("prompt", "")):
+            q["cur"] = 1
+            continue
+        names = [q.get("answer")] + list(q.get("options") or []) + [s.get("name") for s in q.get("sides") or []] \
+                + [s.get("name") for s in q.get("slots") or []]
+        ps = [B.players_by_key_all.get(B.norm(n)) for n in names if isinstance(n, str) and n]
+        ps = [p for p in ps if p]
+        if ps and all(p.active for p in ps):
+            q["cur"] = 1
+
+
 def run_all(bank, PL, famous, P, src):
     print("More formats:")
     gen_teammate_link(bank, PL, famous)
@@ -813,3 +974,6 @@ def run_all(bank, PL, famous, P, src):
     gen_gm_survey(bank, src)
     gen_referees(bank, src)
     gen_last_night(bank, PL, src)
+    gen_this_season(bank, PL, famous, src)
+    gen_last_season(bank, PL, famous)
+    tag_current(bank)

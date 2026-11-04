@@ -29,6 +29,7 @@ const DEFAULTS = {
   predictPoints: [300, 200, 100], predictExact: 500,
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
   typedMin: 15, statLineExtra: 5,
+  currentShare: 0.65,                  // about 2 of every 3 questions are about today's players and this season
   afterFirstCorrect: 5,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
   // The 4 theme-vote columns. Each is tied to one gift; every coin of that gift is one vote.
@@ -360,7 +361,9 @@ const isTF = q => q.type === 'mc' && q.options.length === 2 && q.options[0] === 
 // birthdays only on that day of the year, and the referee round runs once a night.
 const etToday = () => { const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })); return d; };
 function usableToday(q) {
-  if (q.validOn && q.validOn !== nightKey()) return false;
+  // dated questions (this season's numbers, last night's games) are rebuilt about 5:45am ET, so yesterday's
+  // copy keeps working until 8am ET
+  if (q.validOn && q.validOn !== nightKey() && !(q.validOn === ymd(new Date(etDate().getTime() - 864e5)) && etDate().getHours() < 8)) return false;
   if (q.mmdd) { const d = etDate(); if (q.mmdd !== `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`) return false; }
   if (q.rare && P.rare && P.rare[nightKey()]) return false;
   return true;
@@ -386,8 +389,12 @@ function pickQueue(theme, opts = {}) {
     const d = r < CFG.diffMix.easy ? 'easy' : r < CFG.diffMix.easy + CFG.diffMix.medium ? 'medium' : 'hard';
     const list = byDiff[d].length ? byDiff[d] : (byDiff.medium.length ? byDiff.medium : byDiff.easy.length ? byDiff.easy : byDiff.hard);
     if (!list.length) break;
-    const idx = list.findIndex(q => (typeCount[q.type] || 0) < (cap[q.type] ?? 99) && (!out.length || out[out.length - 1].type !== q.type || guard > 200)
-      && !(q.rare && out.some(x => x.rare)) && !(is2K(q) && out.some(is2K)));
+    const ok = q => (typeCount[q.type] || 0) < (cap[q.type] ?? 99) && (!out.length || out[out.length - 1].type !== q.type || guard > 200)
+      && !(q.rare && out.some(x => x.rare)) && !(is2K(q) && out.some(is2K));
+    // lean on today's players and this season; history fills the rest
+    const wantCur = Math.random() < CFG.currentShare;
+    let idx = list.findIndex(q => ok(q) && !!q.cur === wantCur);
+    if (idx < 0) idx = list.findIndex(ok);
     if (idx < 0) { list.shift(); continue; }
     const q = list.splice(idx, 1)[0];
     typeCount[q.type] = (typeCount[q.type] || 0) + 1;
@@ -400,7 +407,8 @@ function pickQueue(theme, opts = {}) {
     while (out.length < CFG.questionsPerGame && extra.length) { const q = extra.shift(); if (!(is2K(q) && out.some(is2K))) out.push(q); }
   }
   if (!opts.choiceOnly) {
-    const battles = shuffle(all.filter(q => q.type === 'battle' && !S.used.has(q.id)));
+    let battles = shuffle(all.filter(q => q.type === 'battle' && !S.used.has(q.id)));
+    if (Math.random() < 0.8) battles = battles.filter(q => q.cur).concat(battles.filter(q => !q.cur));
     if (battles.length && out.length > CFG.battleSlot) out.splice(CFG.battleSlot, 0, battles[0]);
     // Predict tonight: one of tonight's games that hasn't tipped off yet, as question 3
     const pq = predictQuestion();
@@ -412,6 +420,17 @@ function pickQueue(theme, opts = {}) {
     tf.forEach((q, i) => out.push(Object.assign({}, q, { speed: i + 1 })));
   }
   return out;
+}
+async function reloadQuestions() {
+  try {
+    const r = await fetch(CFG.questionsUrl, { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && d.questions && d.questions.length > 1000) {
+      S.data = d;
+      S.themes = S.data.themes.filter(t => S.data.questions.filter(q => q.theme === t && usableToday(q)).length >= CFG.questionsPerGame * 2);
+    }
+  } catch (e) {}
 }
 function markUsed(q) { S.used.add(q.id); store('hhq_used', [...S.used].slice(-4000)); }
 function rollVoteThemes() {
@@ -924,6 +943,8 @@ const THEME_DESC = {
   'Ratings & Votes': 'NBA 2K ratings, award votes and the GM survey.',
   'Around the League': 'Arenas, crowds and the officials.',
   'Tonight in the NBA': 'Last night, birthdays and the standings today.',
+  'This Season': 'Leaders, stat races and the standings, as of this morning.',
+  'Last Season': 'The 2025-26 season: leaders and award winners.',
   'Mixed': 'A bit of everything.',
 };
 function renderIntro() {
@@ -1020,7 +1041,8 @@ function vsHtml(q, reveal) {
     const val = q.type === 'hl' ? `<div class="val${reveal ? '' : ' hide'}">${reveal ? esc(s.value) : '?'}</div>` : '';
     const meta = q.type === 'battle' ? `<div class="meta">${esc(s.value || '')}</div>` : '';
     const tm = sc.teams[i] ? `<div class="tm"><img src="${logoUrl(sc.teams[i])}" alt="" onerror="this.remove()">${esc(TEAMS[sc.teams[i]][0])}</div>` : '';
-    return `<div class="side${cls}" style="--tc:${sc.colors[i]}"><div class="k">${'AB'[i]}</div>${photo(s.img)}${tm}<div class="nm">${esc(s.name)}</div>${val}${meta}</div>`;
+    const pic = s.logo && TEAM_IDS[s.logo] ? `<div class="photo teamlogo"><img src="${logoUrl(s.logo)}" alt="" onerror="this.remove()"></div>` : photo(s.img);
+    return `<div class="side${cls}" style="--tc:${sc.colors[i]}"><div class="k">${'AB'[i]}</div>${pic}${tm}<div class="nm">${esc(s.name)}</div>${val}${meta}</div>`;
   }).join('');
   let split = '';
   if (q.type === 'battle') {
@@ -1476,6 +1498,7 @@ async function boot() {
   setInterval(tick, 200);
   setInterval(rotateStandings, 500);
   awardTitles(); setInterval(awardTitles, 60000);
+  setInterval(reloadQuestions, 60 * 60 * 1000);   // the morning rebuild reaches a stream that runs past it
   await loadSchedule(); settlePredictions(); setInterval(settlePredictions, 10 * 60 * 1000);
   setInterval(() => { renderStandings(); if (rankShowing) renderMe(); }, 15000);   // rolling windows drop old points even when nobody scores
   if (PRACTICE) startPractice(); else connectBridge();

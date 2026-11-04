@@ -25,6 +25,8 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 - **Higher or lower:** two players with close numbers, chat types A or B. Also draft combine, head to head (players who debuted in 2016-17 or later), clutch points, buzzer-beaters and streaks.
 - **Order it:** three players, chat types the order (e.g. BAC). Exact order scores full points, the right top pick scores 40%.
 - **Fill the board** (6 names or fewer), **closest number** (also NBA 2K ratings, one per game at most, and "pick the season"), **chat battles**.
+- **This Season / Last Season:** league and team leaders, stat races, points-per-game guesses and the standings as of that morning (team logos for record questions), plus 2025-26 leaders and award winners. About two of every three questions in a game are about today's players or this season.
+- **Chat battles:** two players at the same level right now (last season's numbers and honours) and of similar standing, plus a few all-time debates between equals.
 - **Predict tonight:** total points in one of tonight's games. Scored automatically the next time the quiz runs after the final.
 - **Speed round:** every 2nd game ends with 5 true-or-false questions, 6 seconds each, points doubling.
 - **Survivor:** every 3rd game, one wrong or missed answer and you're out. Survivors get +300 (double if three or fewer).

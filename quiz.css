@@ -521,3 +521,7 @@ body[data-layout="courtside"] .oside { background: #fff; border: 3px solid var(-
 
 /* Survivor tag in the theme bar */
 #theme-name .tag.surv { background: var(--accent); color: #fff; }
+
+/* team logos in A-or-B questions (standings) */
+.photo.teamlogo { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+.photo.teamlogo img { object-fit: contain; padding: 10px; background: transparent; }

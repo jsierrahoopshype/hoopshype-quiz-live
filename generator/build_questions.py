@@ -797,23 +797,63 @@ def gen_franchise(bank, PL):
            [n for n, _ in top[1:4]], fact=f"{num(top[0][1])} points")
 
 def gen_battles(bank, PL, famous):
-    elite = sorted([p for p in famous if p.fame >= 35], key=lambda p: -p.fame)[:60]
-    prompts = ["Better career?", "Who would you build a team around?", "Who had the better peak?", "Better player?"]
-    for _ in range(220):
-        a, b = bank.rnd.sample(elite, 2)
-        if abs(a.fame - b.fame) > 40:
+    """Chat votes (no right answer), always between two players at the same level (Nov 2026)."""
+    rnd = bank.rnd
+    def ratio(x, y):
+        lo, hi = sorted((x, y))
+        return lo / hi if hi else 0
+    # today's players: how good they are right now = last season's line (this season's if he barely played),
+    # plus that season's All-NBA, MVP and All-Star honours
+    def line(p, y):
+        rows = [s for s in p.seasons if s["y"] == y]
+        gp = sum(s["gp"] for s in rows)
+        return (gp, {k: sum(s[k] for s in rows) / gp for k in STAT_ORDER}) if gp else (0, None)
+    now = []
+    for p in famous:
+        if not (p.active and okp(p)):
             continue
-        q = {"type": "battle", "theme": "Chat Battles", "difficulty": "easy", "prompt": bank.rnd.choice(prompts),
+        gp, ln = line(p, CURRENT_END_YEAR - 1)
+        y = CURRENT_END_YEAR - 1
+        if gp < 30:
+            gp, ln = line(p, CURRENT_END_YEAR)
+            y = CURRENT_END_YEAR
+        if not ln:
+            continue
+        honours = {a for a, yy, _ in p.awards if yy == CURRENT_END_YEAR - 1}
+        score = (ln["PTS"] + 0.6 * ln["REB"] + 0.8 * ln["AST"] + ln["STL"] + ln["BLK"]
+                 + (10 if "Most Valuable Player" in honours else 0) + (6 if "All-NBA First Team" in honours else 0)
+                 + (4 if "All-NBA Second Team" in honours else 0) + (2 if "All-NBA Third Team" in honours else 0)
+                 + (2 if "All-Star" in honours else 0))
+        tag = f"{ln['PTS']:.1f} PTS · {ln['REB']:.1f} REB · {ln['AST']:.1f} AST ({season(y)})"
+        now.append((score, p, tag))
+    now.sort(key=lambda x: -x[0])
+    now = now[:70]
+    pairs = set()
+    for _ in range(3000):
+        if len(now) < 2:
+            break
+        (sa, a, ta), (sb, b, tb) = rnd.sample(now, 2)
+        if ratio(sa, sb) < 0.92 or ratio(a.fame, b.fame) < 0.55:     # same level now AND similar standing
+            continue
+        if frozenset((a.name, b.name)) in pairs:
+            continue
+        pairs.add(frozenset((a.name, b.name)))
+        q = {"type": "battle", "theme": "Chat Battles", "difficulty": "easy", "cur": 1,
+             "prompt": rnd.choice(["Better player right now?", "Who would you rather have?", "Who has the better season?",
+                                   "Who would you build around?"]),
+             "sides": [{"name": a.name, "img": a.img, "value": ta}, {"name": b.name, "img": b.img, "value": tb}], "answer": ""}
+        bank.add(q)
+    # a few all-time debates, only between true equals
+    elite = sorted([p for p in famous if p.fame >= 35 and okp(p)], key=lambda p: -p.fame)[:60]
+    for _ in range(400):
+        a, b = rnd.sample(elite, 2)
+        if ratio(a.fame, b.fame) < 0.88:
+            continue
+        q = {"type": "battle", "theme": "Chat Battles", "difficulty": "easy",
+             "prompt": rnd.choice(["Better career?", "Who had the better peak?"]),
              "sides": [{"name": a.name, "img": a.img, "value": f"{a.allstar}x All-Star · {a.rings} ring" + ("s" if a.rings != 1 else "")},
                        {"name": b.name, "img": b.img, "value": f"{b.allstar}x All-Star · {b.rings} ring" + ("s" if b.rings != 1 else "")}],
              "answer": ""}
-        bank.add(q)
-    active = sorted([p for p in famous if p.active and p.fame >= 15], key=lambda p: -p.fame)[:30]
-    for _ in range(120):
-        a, b = bank.rnd.sample(active, 2)
-        q = {"type": "battle", "theme": "Chat Battles", "difficulty": "easy",
-             "prompt": bank.rnd.choice(["Who has the better season?", "Better player right now?", "Who would you rather have?"]),
-             "sides": [{"name": a.name, "img": a.img, "value": ""}, {"name": b.name, "img": b.img, "value": ""}], "answer": ""}
         bank.add(q)
 
 def gen_true_false(bank, PL, famous):
@@ -885,7 +925,7 @@ THEMES = ["Career Paths", "Stat Lines", "Draft & Bio", "Awards & Rings", "Record
           "Jersey Kings", "Around the World", "Name the Face", "Franchise Legends",
           # Nov 2026 formats (generator/more_formats.py)
           "Teammates", "Odd One Out", "Head to Head", "Clutch & Streaks", "Ratings & Votes",
-          "Around the League", "Tonight in the NBA"]
+          "Around the League", "Tonight in the NBA", "This Season", "Last Season"]
 
 def main():
     ap = argparse.ArgumentParser()
