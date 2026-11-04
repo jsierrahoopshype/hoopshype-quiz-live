@@ -779,6 +779,12 @@ def gen_last_night(bank, PL, src):
     if not sb:
         return
     today = et_today().isoformat()
+    evs = sb.get("events", [])
+    done = [e for e in evs if (e.get("status", {}).get("type", {}) or {}).get("completed")]
+    print(f"    ESPN {day}: {len(evs)} games, {len(done)} final")
+    if done:
+        c0 = ((done[0].get("competitions") or [{}])[0].get("competitors") or [{}])[0]
+        print("    leader boards seen:", [l.get("name") for l in (c0.get("leaders") or [])][:8], "keys:", sorted(c0.keys())[:20])
     for ev in sb.get("events", []):
         comp = (ev.get("competitions") or [{}])[0]
         if not (ev.get("status", {}).get("type", {}).get("completed")):
@@ -803,6 +809,7 @@ def gen_last_night(bank, PL, src):
             name = ((top.get("athlete") or {}).get("displayName") or "").strip()
             p = B.players_by_key_all.get(B.norm(name))
             if not p:
+                print(f"    no player match for {name!r}")
                 continue
             nick = B.NICK.get(code, FULL[code])
             onick = B.NICK.get(opp[0], opp[0])
