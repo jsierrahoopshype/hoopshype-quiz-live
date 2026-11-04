@@ -2,7 +2,7 @@ name: Rebuild question bank
 
 # Every day at 10:47 UTC (about 5:47am ET, after last night's finals and the 10:23 standings update),
 # plus a manual "Run workflow" button. Pulls the public HoopsMatic data repos, last night's top scorers
-# (ESPN scoreboard, the feed nba-alt-standings already uses) and shot charts (public Hugging Face dataset),
+# (ESPN scoreboard, the feed nba-alt-standings already uses)
 # and commits data/questions.json only if the questions changed. No keys: only the built-in GitHub token.
 on:
   schedule:
@@ -26,7 +26,6 @@ jobs:
         run: bash generator/fetch_sources.sh
       - name: Build questions
         env:
-          QUIZ_FETCH_SHOTS: '1'
           QUIZ_FETCH_ESPN: '1'
         run: python generator/build_questions.py --src sources --out data/questions.json
       - name: Commit if changed

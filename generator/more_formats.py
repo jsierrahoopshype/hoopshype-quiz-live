@@ -6,18 +6,17 @@ fully optional: if its file is missing or its format changes, it prints a warnin
 so the rest of the bank still builds. Nothing here reads the HoopsHype rumors archive.
 
 Formats
-  Teammates        "Name a player who played with both A and B"            type anyof  (typed)
+  Teammates        "Who played with both A and B?" (four names)           type mc
   Born today       "This player was born on this day in 1995"              type guess  (q.mmdd: only shown that day)
   Hometowns        "Born in Akron, Ohio..."                               type guess
   Before the NBA   "Which club did Luka Doncic play for before the NBA?"   type mc
-  Shot charts      a season's shot chart, name the player                  type guess  (q.shots)
   2K ratings       "What is his NBA 2K27 rating?"                          type closest
   Pick the season  four facts, type the year the season started           type closest (q.facts)
   Odd one out      three share a team/college/draft class, pick the one who doesn't   type mc
   Order it         three players, type the order (e.g. BAC)                type order
   Award voting     "Who finished 3rd in the 2011 MVP vote?"                type mc
   Draft combine    whose wingspan/vertical was bigger                      type hl
-  Head to head     who won more games against the other since 2016-17      type hl
+  Head to head     who won more games against the other (both debuted 2016-17 or later)   type hl
   Clutch           more clutch points / buzzer-beating game-winners        type hl
   Streaks          the longer streak of 20-point games etc.                type hl
   Beat Vegas       furthest ahead of its preseason win total (today)       type mc     (q.validOn)
@@ -104,22 +103,26 @@ def gen_teammate_link(bank, PL, famous):
         if b.name in mates[a.name]:
             continue                     # they played together: too easy to confuse
         common = sorted(mates[a.name] & mates[b.name])
-        if not 2 <= len(common) <= 14:
+        if not 1 <= len(common) <= 10:
             continue
-        answers = []
-        for n in common:
+        def known(n):
             p = B.players_by_key_all.get(B.norm(n))
-            answers.append({"name": n, "accept": B.accept_names(p, B.players_by_key_all) if p else [B.norm(n)],
-                            "img": p.img if p else None, "fame": round(p.fame, 1) if p else 0})
-        answers.sort(key=lambda x: -x["fame"])
-        diff = "easy" if len(common) >= 8 else "medium" if len(common) >= 4 else "hard"
-        q = {"type": "anyof", "theme": "Teammates", "difficulty": diff,
-             "prompt": f"Name a player who was a teammate of both {a.name} and {b.name}",
-             "sides": [{"name": a.name, "img": a.img}, {"name": b.name, "img": b.img}],
-             "answers": answers, "answer": answers[0]["name"],
-             "fact": f"{len(common)} players were teammates of both"}
-        bank.add(q)
-        made += 1
+            return p if B.okp(p) and p.fame >= 4 * B.STAR else None
+        right = [known(n) for n in common]
+        right = [p for p in right if p]
+        # decoys: well-known teammates of only one of the two, so every option looks plausible
+        only = [known(n) for n in sorted((mates[a.name] ^ mates[b.name]) - {a.name, b.name})]
+        only = sorted([p for p in only if p], key=lambda p: -p.fame)[:24]
+        if not right or len(only) < 3:
+            continue
+        ans = max(right, key=lambda p: p.fame)
+        wrong = [p.name for p in rnd.sample(only, 3)]
+        diff = "medium" if len(common) >= 4 else "hard"
+        before = len(bank.qs)
+        B.mc(bank, "Teammates", diff, f"Who was a teammate of both {a.name} and {b.name}?", ans.name, wrong,
+             fact=f"{len(common)} player{'s' if len(common) != 1 else ''} played with both")
+        if len(bank.qs) > before:
+            made += 1
 
 
 # =====================================================================================
@@ -236,7 +239,6 @@ def gen_before_nba(bank, PL, famous, src):
 # =====================================================================================
 # 6. Shot charts (shards from the public cdechoch/nba-data-archive dataset on Hugging Face)
 # =====================================================================================
-HF_SHOTS = "https://huggingface.co/datasets/cdechoch/nba-data-archive/resolve/main/shot-chart-shards"
 
 
 def _fetch(url, dest, timeout=40):
@@ -253,50 +255,6 @@ def _fetch(url, dest, timeout=40):
     except Exception as e:  # noqa: BLE001
         print(f"    could not fetch {url}: {e}")
         return False
-
-
-@safe
-def gen_shot_charts(bank, PL, famous, src):
-    shot_dir = _path(src, "shot-chart-shards")
-    online = os.environ.get("QUIZ_FETCH_SHOTS") == "1"
-    pool = [p for p in famous if pid_of(p) and (p.last or 0) >= 2000][:160]
-    for p in pool:
-        pid = pid_of(p)
-        dest = os.path.join(shot_dir, f"{pid}.json")
-        if not os.path.exists(dest):
-            if not online or not _fetch(f"{HF_SHOTS}/players/{pid // 100}/{pid}.json", dest):
-                continue
-        try:
-            shard = json.load(open(dest, encoding="utf-8"))
-            cols = shard["shots"]
-        except Exception:
-            continue
-        n = len(cols["x"])
-        by_season = collections.defaultdict(list)
-        for i in range(n):
-            if cols["po"][i] == 1:
-                continue
-            by_season[cols["s"][i]].append(i)
-        if not by_season:
-            continue
-        sy, idx = max(by_season.items(), key=lambda kv: len(kv[1]))
-        if len(idx) < 400:
-            continue
-        made = sum(cols["m"][i] for i in idx)
-        threes = sum(cols["3"][i] for i in idx)
-        step = max(1, len(idx) // 260)
-        shots = [[int(round(cols["x"][i])), int(round(cols["y"][i])), int(cols["m"][i])] for i in idx[::step]][:260]
-        # shot "s" is the season START year in the shard (1996 = 1996-97)
-        end_y = int(sy) + 1
-        team = next((B.team_name(s["team"], s["y"]) for s in p.seasons if s["y"] == end_y), None)
-        clues = [f"Season: {B.season(end_y)}", f"{B.num(len(idx))} shots, {100 * made / len(idx):.1f}% made",
-                 f"{100 * threes / len(idx):.0f}% of his shots were threes"]
-        if team: clues.append(f"Team: {team}")
-        before = len(bank.qs)
-        B.guess(bank, "Shot Charts", p.difficulty, "Whose shot chart is this?", p, clues, B.players_by_key_all,
-                fact=f"{p.name}, {B.season(end_y)}")
-        if len(bank.qs) > before:
-            bank.qs[-1]["shots"] = shots
 
 
 # =====================================================================================
@@ -319,8 +277,9 @@ def gen_2k(bank, PL, famous, src):
             continue
         eds.sort(key=lambda kv: int(kv[0][2:]))
         latest = eds[-1]
-        picks = [latest] + ([max(eds[:-1], key=lambda kv: kv[1])] if len(eds) > 2 else [])
-        for k, v in picks:
+        if p.fame < 10 * B.STAR:
+            continue
+        for k, v in [latest]:
             ed = "NBA 2K" + k[2:]
             B.closest(bank, "Ratings & Votes", "medium" if v >= 85 else "hard", f"What was {p.name}'s overall rating in {ed}?",
                       v, str, sub="Type a number. Closest wins", p=p)
@@ -547,7 +506,8 @@ def gen_head_to_head(bank, PL, famous, src):
     if not games:
         print("  (skipped: no box scores downloaded)")
         return
-    stars = [p for p in famous if p.key in played and len(played[p.key]) >= 150 and p.fame >= 15 * B.STAR]
+    stars = [p for p in famous if p.key in played and len(played[p.key]) >= 150 and p.fame >= 6 * B.STAR
+             and (p.first or 0) >= 2017]
     rnd = bank.rnd
     seen = set()
     for _ in range(4000):
@@ -567,8 +527,8 @@ def gen_head_to_head(bank, PL, famous, src):
             continue
         seen.add(k)
         B.hl(bank, "Head to Head", "medium" if abs(aw - bw) >= 4 else "hard",
-             f"Since 2016-17, who has won more of their head-to-head games?", a, aw, b, bw, lambda v: f"{v} wins",
-             fact=f"{len(both)} regular-season games against each other")
+             "Who has won more of their head-to-head games?", a, aw, b, bw, lambda v: f"{v} wins",
+             fact=f"{len(both)} regular-season games against each other, through 2025-26")
 
 
 # =====================================================================================
@@ -839,7 +799,6 @@ def run_all(bank, PL, famous, P, src):
     gen_born_today(bank, PL, famous)
     gen_hometowns(bank, PL, famous)
     gen_before_nba(bank, PL, famous, src)
-    gen_shot_charts(bank, PL, famous, src)
     gen_2k(bank, PL, famous, src)
     gen_pick_season(bank, PL, famous)
     gen_odd_one_out(bank, PL, famous)

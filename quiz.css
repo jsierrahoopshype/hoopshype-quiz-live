@@ -32,13 +32,13 @@ body { font-family: var(--body); color: var(--white); -webkit-font-smoothing: an
 
 /* Theme + progress */
 #themebar { position: absolute; top: 250px; left: 48px; right: 48px; height: 62px; display: flex; align-items: center; justify-content: space-between; }
-#theme-name { font-family: var(--cond); font-weight: 800; font-size: 52px; letter-spacing: .5px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 640px; }
-#theme-name .tag { display: inline-block; margin-left: 16px; padding: 2px 12px; font-size: 32px; vertical-align: 6px; background: var(--gold); color: var(--ink); }
-#pips { display: flex; gap: 8px; }
-.pip { width: 34px; height: 12px; background: var(--line-dark); }
+#theme-name { font-family: var(--cond); font-weight: 800; font-size: 52px; letter-spacing: .5px; text-transform: uppercase; white-space: nowrap; overflow: hidden; flex: 1 1 auto; min-width: 0; margin-right: 24px; }
+#theme-name .tag { display: inline-block; margin-left: 16px; padding: 2px 12px; font-size: .62em; vertical-align: 6px; background: var(--gold); color: var(--ink); }
+#pips { display: flex; gap: 6px; flex: 0 0 auto; }
+.pip { width: 22px; height: 12px; background: var(--line-dark); }
 .pip.done { background: #6c7180; }
 .pip.now { background: var(--accent); }
-.pip.battle { width: 22px; }
+.pip.battle { width: 14px; }
 
 /* The question board */
 #panel { position: absolute; top: 322px; left: 40px; right: 40px; height: 760px; background: var(--board); color: var(--ink); border-radius: 10px; overflow: hidden; }
@@ -214,7 +214,7 @@ body { font-family: var(--body); color: var(--white); -webkit-font-smoothing: an
 #gameno .champ { color: var(--gold); }
 #gameno .champ b { color: var(--white); font-weight: 800; }
 #gameno { flex: 1; min-width: 0; margin-left: 30px; font-size: 34px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
-#pips .gno { font-family: var(--cond); font-weight: 800; font-size: 30px; color: #c9ccd3; margin-right: 10px; letter-spacing: .5px; }
+#pips .gno { font-family: var(--cond); font-weight: 800; font-size: 30px; color: #c9ccd3; margin-right: 10px; letter-spacing: .5px; white-space: nowrap; line-height: 1; }
 #pips { align-items: center; }
 .team { font-family: var(--cond); font-weight: 800; font-size: .8em; color: var(--sub); letter-spacing: .5px; }
 #eventline .team { color: inherit; opacity: .75; }

@@ -2,7 +2,7 @@
 title HoopsHype NBA Quiz Live - set the TikTok account
 cd /d "%~dp0"
 rem Changes which TikTok account the quiz reads chat from (the "tiktokUsername" line in config.json).
-rem Use it again the day the account changes, e.g. from hoopshypeofficial to hoopshype.
+rem Use it again the day the account changes, e.g. from hoopshype to another account.
 echo.
 echo The quiz reads chat, gifts and likes from this TikTok account:
 powershell -NoProfile -Command "(Get-Content -Raw 'config.json' | ConvertFrom-Json).tiktokUsername"

@@ -385,8 +385,13 @@ def guess(bank, theme, diff, prompt, p, clues, players, fact=None, image=None, i
 def okp(p):
     return p is not None and p.ok
 
+def close_enough(av, bv):
+    """A-or-B questions only when the two numbers are close (no 4 All-Star teams vs. 19)."""
+    lo, hi = sorted((abs(av), abs(bv)))
+    return hi - lo <= 2 or (hi > 0 and lo / hi >= 0.7)
+
 def hl(bank, theme, diff, prompt, a, av, b, bv, fmt, fact=None, lower_wins=False):
-    if av == bv or not (okp(a) and okp(b)):
+    if av == bv or not (okp(a) and okp(b)) or not close_enough(av, bv):
         return
     win = (0 if av < bv else 1) if lower_wins else (0 if av > bv else 1)
     q = {"type": "hl", "theme": theme, "difficulty": diff, "prompt": prompt,
@@ -597,12 +602,12 @@ def gen_awards(bank, PL, famous):
             board(bank, "Awards & Rings", "medium", f"Name every Finals MVP from {rows[0][0]} to {rows[-1][0]}", rows, PL, seconds=90)
     # All-Star counts, rings: higher/lower + closest
     stars = [p for p in famous if p.allstar >= 3 and ((p.last or 0) >= 1985 or p.fame >= 45)]
-    for _ in range(260):
+    for _ in range(900):
         a, b = bank.rnd.sample(stars, 2)
         if abs(a.allstar - b.allstar) >= 1:
             hl(bank, "Awards & Rings", "medium", "Who made more All-Star teams?", a, a.allstar, b, b.allstar, lambda v: f"{v}x")
     ringers = [p for p in famous if p.rings >= 1 and p.fame >= 15 * STAR and ((p.last or 0) >= 1985 or p.fame >= 45)]
-    for _ in range(140):
+    for _ in range(500):
         a, b = bank.rnd.sample(ringers, 2)
         if a.rings != b.rings:
             hl(bank, "Awards & Rings", "medium", "Who has more championship rings?", a, a.rings, b, b.rings,
@@ -628,7 +633,7 @@ def gen_leaders(bank, PL, P):
             board(bank, "Record Book", "medium", f"Name the top 5 active players in career {word}",
                   [(num(r["total"]), r["name"]) for r in active[:5]], PL, seconds=60)
         top = [r for r in rows[:170]]
-        for _ in range(70):
+        for _ in range(200):
             a, b = bank.rnd.sample(top, 2)
             pa, pb = PL.get(a["name"]) or players_by_key_all.get(norm(a["name"])), PL.get(b["name"]) or players_by_key_all.get(norm(b["name"]))
             if pa and pb and pa.fame >= 8 * STAR and pb.fame >= 8 * STAR:
@@ -666,7 +671,7 @@ def gen_feats(bank, PL, P):
             board(bank, "Record Book", "medium", f"Name the top 8 players in career {word}",
                   [(str(r[2]), nm(r[1])) for r in rows[:8]], PL, seconds=80)
         top = rows[:60]
-        for _ in range(40):
+        for _ in range(120):
             a, b = bank.rnd.sample(top, 2)
             pa, pb = players_by_key_all.get(norm(nm(a[1]))), players_by_key_all.get(norm(nm(b[1])))
             if pa and pb:
@@ -709,7 +714,7 @@ def gen_money(bank, PL, famous):
         if not p.active and min(p.salary) >= 1991:
             closest(bank, "Money Talks", p.difficulty, f"How much did {p.name} earn in NBA salary over his career?",
                     round(v / 1_000_000), lambda m: f"${m}M", sub="Answer in millions. Closest wins", p=p)
-    for _ in range(160):
+    for _ in range(400):
         (av, a), (bv, b) = bank.rnd.sample(earners[:210], 2)
         if abs(av - bv) / max(av, bv) > 0.05:
             hl(bank, "Money Talks", "medium", "Who earned more in his NBA career?", a, av, b, bv, money,
@@ -744,7 +749,7 @@ def gen_heights(bank, PL, famous):
         if abs(ha - hb) >= 2:
             hl(bank, "Draft & Bio", "medium", "Who is taller?", a, ha, b, hb, lambda v: f"{v//12}'{v%12}\"")
     drafted = [p for p in famous if to_int(p.bio.get("PICK")) and p.fame >= 10 * STAR]
-    for _ in range(140):
+    for _ in range(400):
         a, b = bank.rnd.sample(drafted, 2)
         pa, pb = to_int(a.bio["PICK"]), to_int(b.bio["PICK"])
         if pa != pb:
@@ -812,29 +817,74 @@ def gen_battles(bank, PL, famous):
         bank.add(q)
 
 def gen_true_false(bank, PL, famous):
+    """Harder true-or-false (Nov 2026): short stints, teams his teammates went to, numbers just either side of the truth."""
+    rnd = bank.rnd
+    # which franchises each player's teammates also played for: a "false" team that feels right
+    roster = collections.defaultdict(set)
+    for p in PL.values():
+        for s in p.seasons:
+            roster[(s["team"], s["y"])].add(p.name)
+    def tf(p, statement, truth, fact, theme="Career Paths"):
+        q = {"type": "mc", "theme": theme, "difficulty": "hard" if p.fame < 25 * STAR else "medium",
+             "prompt": f"True or false: {statement}", "options": ["True", "False"],
+             "correct": 0 if truth else 1, "answer": "True" if truth else "False", "fact": fact}
+        if p.img: q["image"] = p.img
+        bank.add(q)
     for p in famous:
-        if p.fame < 15 * STAR:
+        if p.fame < 10 * STAR:
             continue
         path = p.teams_path()
         played = {t for t, _, _ in path}
-        others = sorted({team_name(c, 2026) for c in NBA30} - played)
-        if bank.rnd.random() < 0.5 and path:
-            t = bank.rnd.choice(sorted(played))
-            truth = True
-        else:
-            t = bank.rnd.choice(others)
-            truth = False
-        q = {"type": "mc", "theme": "Career Paths", "difficulty": p.difficulty, "prompt": f"True or false: {p.name} played for the {t}.",
-             "options": ["True", "False"], "correct": 0 if truth else 1, "answer": "True" if truth else "False",
-             "fact": f"{p.name} played for: " + ", ".join(x for x, _, _ in path)}
-        if p.img: q["image"] = p.img
-        bank.add(q)
+        stops = ", ".join(t for t, _, _ in path)
+        # 1. teams: true = his shortest stint, false = a team many of his teammates also played for
+        gp = collections.Counter()
+        for s in p.seasons:
+            nm = team_name(s["team"], s["y"])
+            if nm: gp[nm] += s["gp"]
+        near = collections.Counter()
+        for s in p.seasons:
+            for mate in roster[(s["team"], s["y"])]:
+                m = PL.get(mate)
+                if not m or mate == p.name:
+                    continue
+                for ms in m.seasons:
+                    nm = team_name(ms["team"], ms["y"])
+                    if nm and nm not in played and abs(ms["y"] - s["y"]) <= 3:
+                        near[nm] += 1
+        if len(gp) >= 3 and rnd.random() < 0.5:
+            t = min(gp, key=gp.get)
+            tf(p, f"{p.name} played for the {t}.", True, f"{p.name} played for: {stops}")
+        elif near:
+            t = rnd.choice([t for t, _ in near.most_common(4)])
+            tf(p, f"{p.name} played for the {t}.", False, f"{p.name} played for: {stops}")
+        # 2. career averages: a line just above or below the real number
+        g = p.tot["gp"]
+        if g >= 200:
+            word, code = rnd.choice([("points", "PTS"), ("rebounds", "REB"), ("assists", "AST")])
+            avg = p.tot[code] / g
+            if avg >= 3:
+                step = 1.5 if code == "PTS" else 0.8
+                line = round(avg + rnd.choice([-1, 1]) * step * rnd.uniform(0.5, 1.0), 1)
+                if abs(line - avg) >= 0.3:
+                    tf(p, f"{p.name} averaged more than {line} {word} per game in his career.", avg > line,
+                       f"{p.name}: {avg:.1f} {word} per game (regular season)", theme="Stat Lines")
+        # 3. All-Star count: "at least N", one either side of the truth
+        if p.allstar >= 3:
+            n = p.allstar + rnd.choice([-1, 1])
+            tf(p, f"{p.name} made at least {n} All-Star teams.", p.allstar >= n, f"{p.name}: {p.allstar}x All-Star",
+               theme="Awards & Rings")
+        # 4. draft slot: a cutoff right next to where he went
+        pick = to_int(p.bio.get("PICK"))
+        if pick and pick <= 30:
+            cut = max(1, min(30, pick + rnd.choice([-2, -1, 1, 2])))
+            if cut != pick:
+                tf(p, f"{p.name} was the No. 1 pick." if cut == 1 else f"{p.name} was a top-{cut} pick.", pick <= cut, f"{p.name} went No. {pick}", theme="Draft & Bio")
 
 # ---------------------------------------------------------------- main
 THEMES = ["Career Paths", "Stat Lines", "Draft & Bio", "Awards & Rings", "Record Book", "Money Talks",
           "Jersey Kings", "Around the World", "Name the Face", "Franchise Legends",
           # Nov 2026 formats (generator/more_formats.py)
-          "Teammates", "Shot Charts", "Odd One Out", "Head to Head", "Clutch & Streaks", "Ratings & Votes",
+          "Teammates", "Odd One Out", "Head to Head", "Clutch & Streaks", "Ratings & Votes",
           "Around the League", "Tonight in the NBA"]
 
 def main():

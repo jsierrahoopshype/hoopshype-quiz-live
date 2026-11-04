@@ -19,7 +19,7 @@ const DEFAULTS = {
   // seconds per question: 12 at most when you pick an answer (A/B/C/D, true/false, A or B),
   // 15 at most when you have to type something (a player, a team, a number)
   times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, anyof: 15, order: 12, predict: 15, speed: 6,
-           reveal: 6, speedReveal: 3, intro: 4, recap: 6, voteResult: 3 },
+           reveal: 3.5, speedReveal: 2, intro: 4, recap: 6, voteResult: 3 },
   blitzTimes: { guess: 10, mc: 7, tf: 6, hl: 6, battle: 8, board: 10, closest: 10, anyof: 10, order: 8 },
   // game shows: every 3rd game is a Survivor game, every 2nd game ends with a 5-question speed round
   survivorEvery: 3, survivorBonus: 300, speedEvery: 2, speedBase: 25,
@@ -28,6 +28,7 @@ const DEFAULTS = {
   finalsBase: 'https://raw.githubusercontent.com/jsierrahoopshype/nba-alt-standings/HEAD/data/games/',
   predictPoints: [300, 200, 100], predictExact: 500,
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
+  typedMin: 15, statLineExtra: 5,
   afterFirstCorrect: 5,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
   // The 4 theme-vote columns. Each is tied to one gift; every coin of that gift is one vote.
@@ -176,15 +177,13 @@ const trophyTag = u => { const n = trophies(u); return n ? ` <span class="troph"
 const who = u => esc(displayName(u)) + trophyTag(u) + (P.teams[u] ? ` <span class="team">${P.teams[u]}</span>` : '');
 
 // ------------------------------------------------------------------ standings that carry over between streams
-// Saved by the bridge to saved/hoopshype-quiz-state.json. A "night" is a US Eastern date that rolls over
-// at 6am ET, so a late game night stays one night. Weeks start Monday, so the weekly board resets on Mondays.
+// Saved by the bridge to saved/hoopshype-quiz-state.json. A "day" is a US Eastern date that ends at midnight ET.
+// Weeks start Monday, so the weekly board resets at midnight ET going into Monday.
 // log: every point scored in the last hour, as [unix seconds, user, points], for the rolling 15-minute and 1-hour boards
 // titles: { user: { n: nights won, w: weeks won } }, kept forever. awarded: which nights/weeks were already handed out.
 const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] }, preds: {}, rare: {} };
 function etDate(d = new Date()) {
-  const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  et.setHours(et.getHours() - 6);
-  return et;
+  return new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));   // the day ends at midnight ET
 }
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const nightKey = () => ymd(etDate());
@@ -192,7 +191,7 @@ function weekKey() { const d = etDate(); d.setDate(d.getDate() - ((d.getDay() + 
 const today = () => (P.days[nightKey()] ||= { scores: {} });
 const thisWeek = () => (P.weeks[weekKey()] ||= { scores: {}, teams: {} });
 function champion() {
-  // top scorer of the most recent night before tonight
+  // top scorer of the most recent day before today
   const key = Object.keys(P.days).filter(k => k < nightKey()).sort().pop();
   if (!key) return null;
   const top = Object.entries(P.days[key].scores).sort((a, b) => b[1] - a[1])[0];
@@ -217,12 +216,12 @@ function pruneLog() {
   if (i) P.log.splice(0, i);
 }
 
-// ------------------------------------------------------------------ standings: last 15 minutes, last hour, tonight, this week
+// ------------------------------------------------------------------ standings: last 15 minutes, last hour, today, this week
 // The 15-minute board is the one a new viewer can climb right away, so it leads the rotation and stays up longest.
 const WINDOWS = [
   { key: 'm15', label: 'Last 15 min', short: '15 min', secs: 8 },
   { key: 'h1', label: 'Last hour', short: 'hour', secs: 5 },
-  { key: 'night', label: 'Tonight', short: 'tonight', secs: 5 },
+  { key: 'night', label: 'Today', short: 'today', secs: 5 },
   { key: 'week', label: 'This week', short: 'week', secs: 5 },
 ];
 function scoresFor(key) {
@@ -300,7 +299,7 @@ function awardTitles() {
     if (!top || top[1] <= 0) return;
     const t = (P.titles[top[0]] ||= { n: 0, w: 0 });
     t[kind] += 1;
-    addAlert(`<b>${esc(displayName(top[0]))}</b> won ${kind === 'n' ? 'last night' : 'last week'}: 🏆${trophies(top[0])}`);
+    addAlert(`<b>${esc(displayName(top[0]))}</b> won ${kind === 'n' ? 'yesterday' : 'last week'}: 🏆${trophies(top[0])}`);
   };
   Object.keys(P.days).filter(k => k < nightKey()).sort().forEach(k => give('n', k, P.days[k].scores));
   Object.keys(P.weeks).filter(k => k < weekKey()).sort().forEach(k => give('w', k, P.weeks[k].scores));
@@ -366,6 +365,7 @@ function usableToday(q) {
   if (q.rare && P.rare && P.rare[nightKey()]) return false;
   return true;
 }
+const is2K = q => / 2K\d/.test(q.prompt || '');
 const CHOICE = q => q.type === 'mc' || q.type === 'hl' || q.type === 'order';
 function pickQueue(theme, opts = {}) {
   const all = S.data.questions;
@@ -387,7 +387,7 @@ function pickQueue(theme, opts = {}) {
     const list = byDiff[d].length ? byDiff[d] : (byDiff.medium.length ? byDiff.medium : byDiff.easy.length ? byDiff.easy : byDiff.hard);
     if (!list.length) break;
     const idx = list.findIndex(q => (typeCount[q.type] || 0) < (cap[q.type] ?? 99) && (!out.length || out[out.length - 1].type !== q.type || guard > 200)
-      && !(q.rare && out.some(x => x.rare)));
+      && !(q.rare && out.some(x => x.rare)) && !(is2K(q) && out.some(is2K)));
     if (idx < 0) { list.shift(); continue; }
     const q = list.splice(idx, 1)[0];
     typeCount[q.type] = (typeCount[q.type] || 0) + 1;
@@ -397,7 +397,7 @@ function pickQueue(theme, opts = {}) {
   if (out.length < CFG.questionsPerGame) {
     const ids = new Set(out.map(q => q.id));
     const extra = shuffle(all.filter(q => base(q) && !ids.has(q.id) && !S.used.has(q.id) && q.type !== 'board' && !q.rare));
-    while (out.length < CFG.questionsPerGame && extra.length) out.push(extra.shift());
+    while (out.length < CFG.questionsPerGame && extra.length) { const q = extra.shift(); if (!(is2K(q) && out.some(is2K))) out.push(q); }
   }
   if (!opts.choiceOnly) {
     const battles = shuffle(all.filter(q => q.type === 'battle' && !S.used.has(q.id)));
@@ -484,7 +484,8 @@ function nextQuestion() {
   if (S.blitzQueued && !S.blitzLeft) { S.blitzLeft = S.blitzQueued; S.blitzQueued = 0; addAlert('<b>BLITZ ROUND</b>: double points, half the time'); }
   const blitz = S.blitzLeft > 0;
   const tType = q.speed ? 'speed' : q.predict ? 'predict' : isTF(q) ? 'tf' : q.type;
-  const secs = (blitz && !q.speed ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 15;
+  let secs = (blitz && !q.speed ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 15;
+  if (q.type === 'guess' || q.type === 'anyof') secs = typedSecs(q);
   S.qMult = (blitz ? 2 : 1) * S.mult;
   if (q.speed === 1) addAlert('<b>SPEED ROUND</b>: 5 true-or-false, 6 seconds each, points double every question');
   if (q.type === 'order') S.orderAns = new Map();
@@ -492,6 +493,12 @@ function nextQuestion() {
   planReveals(q, secs);
   renderQuestion();
   preload(S.queue[S.qi + 1]);
+}
+// Typed answers (a player or team name): at least 15 seconds or one second per character, whichever is longer,
+// even in a blitz. "Whose season is this?" stat lines get 5 more seconds to read the table.
+function typedSecs(q) {
+  const chars = String(q.answer || '').length;
+  return Math.max(CFG.typedMin, chars) + (q.statLine || /season is this/i.test(q.prompt || '') ? CFG.statLineExtra : 0);
 }
 function endQuestion() {
   const q = S.q;
@@ -844,7 +851,7 @@ function onEvent(ev) {
 const body = () => $('#panel-body');
 function renderThemebar() {
   const c = champion();
-  $('#gameno').innerHTML = c ? `<span class="champ">Last night's champ: <b>${esc(displayName(c.u))}</b>${trophyTag(c.u)}</span>` : '';
+  $('#gameno').innerHTML = c ? `<span class="champ">Yesterday's champ: <b>${esc(displayName(c.u))}</b>${trophyTag(c.u)}</span>` : '';
   let tag = '';
   if (S.survivor && !['recap', 'voteResult'].includes(S.phase)) tag = `<span class="tag surv">SURVIVOR${S.survivor.started ? `: ${S.survivor.alive.size} LEFT` : ''}</span>`;
   else if (S.q && S.q.speed && (S.phase === 'question' || S.phase === 'reveal')) tag = `<span class="tag">SPEED ${S.q.speed}/5</span>`;
@@ -853,11 +860,19 @@ function renderThemebar() {
     else if (S.qMult > 1) tag = '<span class="tag">DOUBLE POINTS</span>';
   }
   $('#theme-name').innerHTML = esc(S.theme || '') + tag;
+  fitThemeName();
   const pips = S.queue.map((q, i) => {
     const st = S.phase === 'recap' || S.phase === 'voteResult' || i < S.qi ? 'done' : (i === S.qi && S.phase !== 'intro') ? 'now' : '';
     return `<span class="pip ${st}${q.type === 'battle' ? ' battle' : ''}"></span>`;
   }).join('');
   $('#pips').innerHTML = (S.game ? `<span class="gno">GAME ${S.game}</span>` : '') + pips;
+}
+// The game's name always shows in full: shrink the type until it fits next to the progress bar
+function fitThemeName() {
+  const el = $('#theme-name');
+  el.style.fontSize = '';
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  while (el.scrollWidth > el.clientWidth + 1 && size > 26) { size -= 2; el.style.fontSize = size + 'px'; }
 }
 function setInstruction(text, mode = 'go') {
   const el = $('#instruction');
@@ -900,7 +915,6 @@ const THEME_DESC = {
   'Name the Face': 'The photo zooms out. Name him first.',
   'Franchise Legends': 'Every team\'s top scorers since 2000-01.',
   'Teammates': 'Name anyone who played with both of them.',
-  'Shot Charts': 'One season of shots. Whose chart is it?',
   'Odd One Out': 'Three of them have something in common. Find the fourth.',
   'Head to Head': 'Who won more when they faced each other?',
   'Clutch & Streaks': 'Game-winners, clutch points and the longest streaks.',
@@ -926,7 +940,7 @@ function renderIntro() {
   body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
     <div class="rules">
       <div class="rule"><b>1</b>Type your answer in the chat. Fastest scores most</div>
-      <div class="rule"><b>2</b>Type RANK any time to see your spot. Win a night or a week for a 🏆</div>
+      <div class="rule"><b>2</b>Type RANK any time to see your spot. Win a day or a week for a 🏆</div>
       <div class="rule"><b>3</b>Type your team once (LAL, BOS, GSW...) to join the team battle</div>
       <div class="rule"><b>4</b>Send a theme's gift to pick the next game</div>
     </div>`;
@@ -1468,5 +1482,5 @@ boot();
 // Save standings when the window closes, so a quick restart doesn't lose the night
 window.addEventListener('beforeunload', () => { try { navigator.sendBeacon('/state' + (PRACTICE ? '?practice=1' : ''), JSON.stringify(P)); } catch (e) {} });
 // Test hooks: play one specific question, or end the current one
-window.HHQ = { onEvent, state: S, saved: P, startGame, settlePredictions, loadSchedule, renderBoards: () => { renderBoards(); renderThemebar(); }, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
+window.HHQ = { onEvent, state: S, saved: P, startGame, pickQueue, settlePredictions, loadSchedule, renderBoards: () => { renderBoards(); renderThemebar(); }, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
 })();
