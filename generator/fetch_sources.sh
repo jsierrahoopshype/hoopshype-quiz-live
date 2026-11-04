@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Downloads the public HoopsMatic data files the question builder reads into ./sources/<repo>/<path>.
-# Used by the weekly GitHub Action. All repos are public, so no keys are needed.
+# Used by the daily GitHub Action. All repos are public, so no keys are needed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-get() {  # owner repo path
+get() {  # owner repo path [public site copy, for repos that went private]
   mkdir -p "sources/$2/$(dirname "$3")"
-  curl -fsSL "https://raw.githubusercontent.com/$1/$2/HEAD/$3" -o "sources/$2/$3"
-  echo "ok  $2/$3"
+  if curl -fsSL "https://raw.githubusercontent.com/$1/$2/HEAD/$3" -o "sources/$2/$3"; then
+    echo "ok  $2/$3"
+  elif [ -n "${4:-}" ] && curl -fsSL "$4" -o "sources/$2/$3"; then
+    echo "ok  $2/$3 (from the public site)"
+  else
+    # one missing file only drops that file's questions; the rest of the bank still builds
+    rm -f "sources/$2/$3"
+    echo "::warning::could not download $2/$3, its questions are skipped today"
+  fi
 }
 get jsierrahoopshype salary-season-finder data_sources/stats.csv
 get jsierrahoopshype salary-season-finder data_sources/bio.csv
@@ -21,7 +28,7 @@ get jsierrahoopshype nba-sneakers         site/search/players.json
 get jsierrahoopshype nba-career-map       data/players/nba_players_careers.json
 get jsierrahoopshype nba-player-data      nba2k.json
 get jsierrahoopshype nba-player-data      awardVotes.json
-get jsierrahoopshype nba-draft-combine    data/combine.json
+get jsierrahoopshype nba-draft-combine    data/combine.json https://jsierrahoopshype.github.io/nba-draft-combine/data/combine.json
 get jsierrahoopshype buzzer-beaters       docs/buzzer-beaters.json
 get jsierrahoopshype clutch-leaderboard   clutch_splits.csv.gz
 get jsierrahoopshype nba-stat-streaks     streaks-data.js
