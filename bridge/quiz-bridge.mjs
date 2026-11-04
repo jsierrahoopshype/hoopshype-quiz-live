@@ -10,7 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+// (strip a byte-order mark: Notepad sometimes adds one, and it would break JSON.parse)
+const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8').replace(/^\uFEFF/, ''));
 const PORT = cfg.port || 8787;
 const log = (...a) => console.log(new Date().toLocaleTimeString(), ...a);
 // PRACTICE-HOOPSHYPE-QUIZ.bat starts the bridge with "practice": fake chat only, no TikTok connection

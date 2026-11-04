@@ -8,6 +8,7 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 |---|---|
 | `START-HOOPSHYPE-QUIZ.bat` | Double-click to run the quiz for real. Opens the quiz window and connects to the TikTok LIVE chat. |
 | `PRACTICE-HOOPSHYPE-QUIZ.bat` | Same quiz with fake chat, gifts and likes, so you can watch it without going LIVE. |
+| `SET-TIKTOK-ACCOUNT.bat` | Changes which TikTok account the quiz reads (now hoopshypeofficial). Run it again if the account changes. |
 | `UPDATE-HOOPSHYPE-QUIZ.bat` | Downloads the latest version from GitHub. Keeps your saved scores, recap cards and config.json. |
 | `saved/` | Created on first run: champions, weekly board, teams and supporters. Not uploaded to GitHub. |
 | `recap-cards/` | Created on first run: a square and a wide PNG after every game, ready for X and Bluesky. Not uploaded to GitHub. |
@@ -38,6 +39,8 @@ Four looks, same screen layout: **Broadcast** (black and white, HoopsHype orange
 The Top 10 rotates through **Last 15 min**, **Last hour**, **Tonight** and **This week**. The 15-minute board stays up longest, so a new viewer can climb it within a few minutes. Anyone can type **RANK** in the chat to see their spot on all four boards and how many points they need to move up.
 
 ## Coming-back features
+
+- **Trophies:** whoever finishes first on a night or a week gets a 🏆, shown next to their name everywhere with the count (🏆3).
 
 - **Last night's champion** shows in the header all night. A "night" is a US Eastern date that rolls over at 6am ET. When the champion first chats, the quiz calls them out.
 - **This week** board resets every Monday (US Eastern).

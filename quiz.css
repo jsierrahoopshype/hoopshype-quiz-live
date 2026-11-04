@@ -10,7 +10,7 @@
   --sub: #646a78;
   --rule: #e4e6eb;
   --tint: #f3f4f6;
-  --accent: #f0531c;
+  --accent: #eb2325;               /* the HoopsHype logo red */
   --green: #109a4c;
   --gold: #f6b400;
   --white: #ffffff;
@@ -358,11 +358,12 @@ body[data-layout="matchup"] .team { color: var(--muted); font-weight: 700; }
    ===================================================================================== */
 body[data-layout="courtside"] {
   --bg: #f3efe6; --bg-2: #ffffff; --line-dark: #d9d2c3; --board: #ffffff; --ink: #111111; --sub: #5b5f69;
-  --rule: #e7e1d4; --tint: #f3efe6; --white: #111111; --gold: #f0531c;
+  --rule: #e7e1d4; --tint: #f3efe6; --white: #111111; --gold: #eb2325;
 }
 body[data-layout="courtside"] #stage { background: var(--bg); color: var(--ink); }
 body[data-layout="courtside"] #masthead { background: transparent; border-bottom: 6px solid var(--ink); }
-body[data-layout="courtside"] .wordmark .hh { color: var(--ink); }
+body[data-layout="courtside"] .logo.on-dark { display: none; }
+body[data-layout="courtside"] .logo.on-light { display: block; }
 body[data-layout="courtside"] #gameno { color: var(--sub); }
 body[data-layout="courtside"] #gameno .champ { color: var(--accent); }
 body[data-layout="courtside"] #gameno .champ b { color: var(--ink); }
@@ -477,3 +478,16 @@ body[data-layout="scoreboard"] #st-list li .s { color: var(--gold); font-variant
 body[data-layout="scoreboard"] #st-list li.hl .s { color: #000; }
 body[data-layout="scoreboard"] #likefill { background: var(--gold); }
 body[data-layout="scoreboard"] #liketext { text-shadow: 0 1px 2px #000; }
+
+/* HoopsHype logo in the masthead: white-lettered version on dark looks, original on Courtside */
+.wordmark .logo { height: 54px; width: auto; display: block; }
+.wordmark .nq { font-size: 46px; }
+.wordmark .sep { height: 40px; }
+.wordmark .logo.on-light { display: none; }
+body[data-layout="matchup"] .wordmark .logo { height: 50px; }
+body[data-layout="matchup"] .wordmark .nq { font-size: 36px; }
+/* trophies: nights and weeks won */
+.troph { font-size: .85em; margin-left: 4px; letter-spacing: -1px; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+/* keep the champion's name readable next to the logo: smaller label, full-size name */
+#gameno .champ { font-size: .78em; }
+#gameno .champ b { font-size: 1.28em; }

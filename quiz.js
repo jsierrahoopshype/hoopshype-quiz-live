@@ -16,10 +16,11 @@ const DEFAULTS = {
   questionsUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/hoopshype-quiz-live/HEAD/data/questions.json',
   questionsPerGame: 8,
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
-  times: { guess: 45, mc: 20, tf: 14, hl: 15, battle: 18, board: 75, closest: 25, reveal: 8, intro: 5, recap: 7, voteResult: 4 },
-  blitzTimes: { guess: 25, mc: 10, tf: 8, hl: 8, battle: 10, board: 40, closest: 14 },
+  // seconds per screen (all 20% shorter than the first version, Nov 2026)
+  times: { guess: 36, mc: 16, tf: 11, hl: 12, battle: 14, board: 60, closest: 20, reveal: 6, intro: 4, recap: 6, voteResult: 3 },
+  blitzTimes: { guess: 20, mc: 8, tf: 6, hl: 6, battle: 8, board: 32, closest: 11 },
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
-  afterFirstCorrect: 8,                // seconds left once somebody names the player
+  afterFirstCorrect: 6,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
   // The 4 theme-vote columns. Each is tied to one gift; every coin of that gift is one vote.
   // Names must match TikTok's gift names exactly. The bridge window prints every gift name it sees.
@@ -157,14 +158,18 @@ const S = {
   revealPlan: null, struck: new Set(), stats: null, connected: false, statusText: '',
 };
 const displayName = u => S.names.get(u) || (P.names && P.names[u]) || u;
-// Name plus team tag, e.g. "thunderup (OKC)"
-const who = u => esc(displayName(u)) + (P.teams[u] ? ` <span class="team">${P.teams[u]}</span>` : '');
+// Trophy count: every night and every week someone finished first. "🏆3" next to their name.
+const trophies = u => { const t = P.titles && P.titles[u]; return t ? (t.n || 0) + (t.w || 0) : 0; };
+const trophyTag = u => { const n = trophies(u); return n ? ` <span class="troph">🏆${n > 1 ? n : ''}</span>` : ''; };
+// Name plus trophies plus team tag, e.g. "thunderup 🏆3 OKC"
+const who = u => esc(displayName(u)) + trophyTag(u) + (P.teams[u] ? ` <span class="team">${P.teams[u]}</span>` : '');
 
 // ------------------------------------------------------------------ standings that carry over between streams
 // Saved by the bridge to saved/hoopshype-quiz-state.json. A "night" is a US Eastern date that rolls over
 // at 6am ET, so a late game night stays one night. Weeks start Monday, so the weekly board resets on Mondays.
 // log: every point scored in the last hour, as [unix seconds, user, points], for the rolling 15-minute and 1-hour boards
-const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [] };
+// titles: { user: { n: nights won, w: weeks won } }, kept forever. awarded: which nights/weeks were already handed out.
+const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] } };
 function etDate(d = new Date()) {
   const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   et.setHours(et.getHours() - 6);
@@ -204,10 +209,10 @@ function pruneLog() {
 // ------------------------------------------------------------------ standings: last 15 minutes, last hour, tonight, this week
 // The 15-minute board is the one a new viewer can climb right away, so it leads the rotation and stays up longest.
 const WINDOWS = [
-  { key: 'm15', label: 'Last 15 min', short: '15 min', secs: 10 },
-  { key: 'h1', label: 'Last hour', short: 'hour', secs: 6 },
-  { key: 'night', label: 'Tonight', short: 'tonight', secs: 6 },
-  { key: 'week', label: 'This week', short: 'week', secs: 6 },
+  { key: 'm15', label: 'Last 15 min', short: '15 min', secs: 8 },
+  { key: 'h1', label: 'Last hour', short: 'hour', secs: 5 },
+  { key: 'night', label: 'Tonight', short: 'tonight', secs: 5 },
+  { key: 'week', label: 'This week', short: 'week', secs: 5 },
 ];
 function scoresFor(key) {
   if (key === 'night') return today().scores;
@@ -238,7 +243,7 @@ function nextRank() {
   rankShowing = rankQ.shift() || null;
   renderMe();
   renderStandings();
-  rankTimer = rankShowing ? setTimeout(nextRank, 4500) : null;
+  rankTimer = rankShowing ? setTimeout(nextRank, 3600) : null;
 }
 function rankLine(u) {
   const parts = WINDOWS.map(w => { const r = rankOf(w.key, u); return `<span class="rk"><b>${r ? '#' + r.pos : '-'}</b> ${w.short}</span>`; });
@@ -270,9 +275,26 @@ async function loadState() {
   let saved = null;
   try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { cache: 'no-store' }); if (r.ok) saved = await r.json(); } catch (e) {}
   if (!saved || !Object.keys(saved).length) saved = store(PRACTICE ? 'hhq_state_practice' : 'hhq_state') || {};
-  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [] }, saved);
+  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] } }, saved);
   if (!Array.isArray(P.log)) P.log = [];
   pruneLog();
+}
+
+// Hand out titles for every finished night and week that hasn't been awarded yet (runs at start-up and every minute)
+function awardTitles() {
+  const give = (kind, key, scores) => {
+    if (P.awarded[kind].includes(key)) return;
+    P.awarded[kind].push(key);
+    const top = Object.entries(scores || {}).sort((a, b) => b[1] - a[1])[0];
+    if (!top || top[1] <= 0) return;
+    const t = (P.titles[top[0]] ||= { n: 0, w: 0 });
+    t[kind] += 1;
+    addAlert(`<b>${esc(displayName(top[0]))}</b> won ${kind === 'n' ? 'last night' : 'last week'}: 🏆${trophies(top[0])}`);
+  };
+  Object.keys(P.days).filter(k => k < nightKey()).sort().forEach(k => give('n', k, P.days[k].scores));
+  Object.keys(P.weeks).filter(k => k < weekKey()).sort().forEach(k => give('w', k, P.weeks[k].scores));
+  P.awarded.n = P.awarded.n.slice(-60); P.awarded.w = P.awarded.w.slice(-20);
+  saveSoon();
 }
 
 // The defending champion gets called out the first time they chat each night
@@ -677,7 +699,7 @@ function onEvent(ev) {
 const body = () => $('#panel-body');
 function renderThemebar() {
   const c = champion();
-  $('#gameno').innerHTML = c ? `<span class="champ">Last night's champ: <b>${esc(displayName(c.u))}</b></span>` : '';
+  $('#gameno').innerHTML = c ? `<span class="champ">Last night's champ: <b>${esc(displayName(c.u))}</b>${trophyTag(c.u)}</span>` : '';
   let tag = '';
   if (S.phase === 'question' || S.phase === 'reveal') {
     if (S.blitzLeft > 0) tag = '<span class="tag">BLITZ</span>';
@@ -715,7 +737,7 @@ function nextAlert() {
   if (!alertQ.length) { alertBusy = false; paintEvent(eventDefault, false); return; }
   alertBusy = true;
   paintEvent(alertQ.shift(), true);
-  setTimeout(nextAlert, 3000);
+  setTimeout(nextAlert, 2400);
 }
 
 // ------------------------------------------------------------------ screen: panels
@@ -737,7 +759,7 @@ function renderIntro() {
   body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
     <div class="rules">
       <div class="rule"><b>1</b>Type your answer in the chat. Fastest scores most</div>
-      <div class="rule"><b>2</b>Type RANK any time to see your spot</div>
+      <div class="rule"><b>2</b>Type RANK any time to see your spot. Win a night or a week for a 🏆</div>
       <div class="rule"><b>3</b>Type your team once (LAL, BOS, GSW...) to join the team battle</div>
       <div class="rule"><b>4</b>Send a theme's gift to pick the next game</div>
     </div>`;
@@ -965,6 +987,7 @@ async function makeRecapCards() {
   const hard = hardestQuestion();
   const face = hard ? await loadImg(hard.q.revealImage || hard.q.image || (hard.q.sides && hard.q.sides[hard.q.correct] && hard.q.sides[hard.q.correct].img)) : null;
   try { await document.fonts.ready; } catch (e) {}
+  const logo = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = 'img/hoopshype-logo-white.png'; });
   const C = getComputedStyle(document.documentElement);
   const col = n => C.getPropertyValue(n).trim();
   const cond = '"Barlow Condensed", "Arial Narrow", Arial, sans-serif', bodyF = 'Barlow, Arial, sans-serif';
@@ -990,8 +1013,11 @@ async function makeRecapCards() {
     x.fillStyle = '#000'; x.fillRect(0, 0, W, mh);
     x.fillStyle = col('--accent'); x.fillRect(0, mh, W, 8);
     x.textBaseline = 'middle';
-    x.font = `800 ${wide ? 52 : 64}px ${cond}`; x.fillStyle = '#fff'; x.fillText('HOOPSHYPE', 56, mh / 2);
-    const w1 = x.measureText('HOOPSHYPE').width;
+    // the HoopsHype logo (white version for the black bar), then "NBA QUIZ"
+    x.font = `800 ${wide ? 52 : 64}px ${cond}`; x.fillStyle = '#fff';
+    let w1;
+    if (logo) { const lh = wide ? 46 : 58, lw = logo.width * lh / logo.height; x.drawImage(logo, 56, mh / 2 - lh / 2, lw, lh); w1 = lw; }
+    else { x.fillText('HOOPSHYPE', 56, mh / 2); w1 = x.measureText('HOOPSHYPE').width; }
     x.fillStyle = col('--accent'); x.fillRect(56 + w1 + 22, mh / 2 - 24, 5, 48);
     x.fillText('NBA QUIZ', 56 + w1 + 50, mh / 2);
     x.textBaseline = 'alphabetic';
@@ -1003,7 +1029,8 @@ async function makeRecapCards() {
     y += wide ? 14 : 18;
     x.fillStyle = col('--gold'); x.font = `800 ${wide ? 46 : 58}px ${cond}`;
     const tTag = P.teams[top[0][0]] ? ` (${P.teams[top[0][0]]})` : '';
-    wrapLines(x, `${displayName(top[0][0])}${tTag} wins with ${fmt(top[0][1])} points`, leftW).forEach(l => { x.fillText(l, L, y); y += wide ? 50 : 62; });
+    const tr = trophies(top[0][0]) ? ` 🏆${trophies(top[0][0])}` : '';
+    wrapLines(x, `${displayName(top[0][0])}${tTag}${tr} wins with ${fmt(top[0][1])} points`, leftW).forEach(l => { x.fillText(l, L, y); y += wide ? 50 : 62; });
     x.fillStyle = '#c9ccd3'; x.font = `600 ${wide ? 30 : 36}px ${bodyF}`;
     top.slice(1).forEach(([u, v], i) => { y += 4; x.fillText(`${i + 2}. ${displayName(u)}: ${fmt(v)}`, L, y); y += wide ? 40 : 48; });
     // white panel: the hardest question
@@ -1122,6 +1149,8 @@ function connectBridge() {
 // ------------------------------------------------------------------ practice simulator (fake chat, gifts, likes)
 function startPractice() {
   S.connected = true;
+  // practice only: a few made-up past titles so the trophies show up
+  if (!Object.keys(P.titles).length) Object.assign(P.titles, { stepbackthree: { n: 3, w: 1 }, mavsfan41: { n: 1, w: 0 }, knicksknation: { n: 2, w: 0 } });
   const bots = ['hoopsfan23', 'Lakeshow4L', 'bucketsgetter', 'mamba_mentality', 'jokicmagic', 'Celtics_17', 'curryrange30',
     'dunkcity', 'goatdebate', 'NBAnerd', 'courtvision', 'ballislife', 'triple_double', 'splash_bro', 'thunderup', 'mavsfan41',
     'heatculture', 'knicksknation', 'okc_boomer', 'spursway21', 'rim_protector', 'stepbackthree', 'fastbreak', 'hoopdreams'];
@@ -1195,6 +1224,8 @@ async function boot() {
   S.likeGoal = CFG.likeGoal;
   await loadLayout();
   await loadState();
+  if (!P.titles) P.titles = {};
+  if (!P.awarded) P.awarded = { n: [], w: [] };
   // Prefer the copy the weekly GitHub job keeps fresh; fall back to the one in this folder
   for (const src of [CFG.questionsUrl, 'data/questions.json'].filter(Boolean)) {
     try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { S.data = await r.json(); break; } } catch (e) {}
@@ -1204,6 +1235,7 @@ async function boot() {
   renderLikes(); renderBoards();
   setInterval(tick, 200);
   setInterval(rotateStandings, 500);
+  awardTitles(); setInterval(awardTitles, 60000);
   setInterval(() => { renderStandings(); if (rankShowing) renderMe(); }, 15000);   // rolling windows drop old points even when nobody scores
   if (PRACTICE) startPractice(); else connectBridge();
   startGame(params.get('theme') || 'Mixed');
