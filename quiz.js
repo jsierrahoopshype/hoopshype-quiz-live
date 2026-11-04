@@ -16,18 +16,19 @@ const DEFAULTS = {
   questionsUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/hoopshype-quiz-live/HEAD/data/questions.json',
   questionsPerGame: 8,
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
-  // seconds per screen (all 20% shorter than the first version, Nov 2026)
-  times: { guess: 36, mc: 16, tf: 11, hl: 12, battle: 14, board: 60, closest: 20, reveal: 6, intro: 4, recap: 6, voteResult: 3 },
-  blitzTimes: { guess: 20, mc: 8, tf: 6, hl: 6, battle: 8, board: 32, closest: 11 },
+  // seconds per question: 12 at most when you pick an answer (A/B/C/D, true/false, A or B),
+  // 15 at most when you have to type something (a player, a team, a number)
+  times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, reveal: 6, intro: 4, recap: 6, voteResult: 3 },
+  blitzTimes: { guess: 10, mc: 7, tf: 6, hl: 6, battle: 8, board: 10, closest: 10 },
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
-  afterFirstCorrect: 6,                // seconds left once somebody names the player
+  afterFirstCorrect: 5,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
   // The 4 theme-vote columns. Each is tied to one gift; every coin of that gift is one vote.
   // Names must match TikTok's gift names exactly. The bridge window prints every gift name it sees.
   themeGifts: ['Rose', 'Ice Cream Cone', 'GG', 'Finger Heart'],
   powerups: { hint: 30, double: 99, blitz: 199 },   // coin thresholds for any other gift
   blitzLength: 3,
-  diffMix: { easy: 0.5, medium: 0.4, hard: 0.1 },
+  diffMix: { easy: 0.3, medium: 0.45, hard: 0.25 },   // was 50/40/10: harder games
 };
 let CFG = DEFAULTS;
 
@@ -36,8 +37,11 @@ let CFG = DEFAULTS;
 // ?layout=matchup in the address previews one look without saving it.
 const LAYOUTS = {
   broadcast: { name: 'Broadcast', cutouts: false },
-  matchup: { name: 'Matchup', cutouts: true },        // the new Player Comparison videos: indigo, Poppins, team colours, cut-outs
   courtside: { name: 'Courtside', cutouts: false },
+};
+// Parked for now (Nov 2026: "just use Broadcast and Courtside"). Their styles stay in quiz.css; add them back here to bring them back.
+const PARKED_LAYOUTS = {
+  matchup: { name: 'Matchup', cutouts: true },        // the new Player Comparison videos: indigo, Poppins, team colours, cut-outs
   scoreboard: { name: 'Scoreboard', cutouts: true },
 };
 let LAYOUT = 'broadcast';
@@ -348,7 +352,8 @@ const isTF = q => q.type === 'mc' && q.options.length === 2 && q.options[0] === 
 // ------------------------------------------------------------------ question picking
 function pickQueue(theme) {
   const all = S.data.questions;
-  const pool = all.filter(q => q.type !== 'battle' && (theme === 'Mixed' || q.theme === theme));
+  // boards with more than 6 names can't be filled in 15 seconds, so they sit out
+  const pool = all.filter(q => q.type !== 'battle' && !(q.type === 'board' && q.slots.length > 6) && (theme === 'Mixed' || q.theme === theme));
   let fresh = pool.filter(q => !S.used.has(q.id));
   if (fresh.length < CFG.questionsPerGame * 2) {           // theme exhausted: forget its history
     pool.forEach(q => S.used.delete(q.id)); fresh = pool.slice();
@@ -482,13 +487,14 @@ function planReveals(q, secs) {
   const letters = [];
   [...q.answer].forEach((c, i) => { if (/[a-z0-9]/i.test(c)) letters.push(i); });
   const order = shuffle(letters.slice()).slice(0, Math.floor(letters.length * 0.45));
-  const startClues = q.clues.length >= 4 ? 2 : 1;
+  // with only 15 seconds, open with most clues showing and unlock the rest in the first half
+  const startClues = Math.max(2, Math.ceil(q.clues.length * 0.6));
   const extra = q.clues.length - startClues;
   const T = secs * 1000;
   S.revealPlan = {
     shownLetters: new Set(),
     letterTimes: order.map((idx, i) => ({ idx, at: T * (0.2 + 0.75 * (i + 1) / (order.length + 1)) })),
-    clueTimes: Array.from({ length: extra }, (_, i) => T * (0.08 + 0.6 * (i + 1) / (extra + 1))),
+    clueTimes: Array.from({ length: extra }, (_, i) => T * (0.05 + 0.45 * (i + 1) / (extra + 1))),
     shownClues: startClues, total: letters.length, zoom: q.imageMode === 'zoom',
   };
 }
