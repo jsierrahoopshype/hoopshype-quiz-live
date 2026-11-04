@@ -18,7 +18,7 @@ const DEFAULTS = {
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
   // seconds per question: 12 at most when you pick an answer (A/B/C/D, true/false, A or B),
   // 15 at most when you have to type something (a player, a team, a number)
-  times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, anyof: 15, order: 12, predict: 15, speed: 6,
+  times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, anyof: 15, order: 12, predict: 10, speed: 6,
            reveal: 3.5, speedReveal: 2, intro: 4, recap: 6, voteResult: 3 },
   blitzTimes: { guess: 10, mc: 7, tf: 6, hl: 6, battle: 8, board: 10, closest: 10, anyof: 10, order: 8 },
   // game shows: every 3rd game is a Survivor game, every 2nd game ends with a 5-question speed round
@@ -724,8 +724,11 @@ function answerGuess(q, u, text) {
   const frac = P && P.total ? P.shownLetters.size / P.total : 0;
   const rank = S.correct.length;
   registerCorrect(u, Math.round(basePoints(q) * (1 - 0.5 * frac)) + (CFG.points.rank[rank] || 0) * (S.qMult || 1));
-  if (rank === 0) S.tEnd = Math.min(S.tEnd, now() + CFG.afterFirstCorrect * 1000);
+  // the first right answer speeds up the end, but every typed question stays up at least 15 seconds
+  // (20 for "Whose season is this?"), so everyone gets to read it and see the picture
+  if (rank === 0) S.tEnd = Math.max(Math.min(S.tEnd, now() + CFG.afterFirstCorrect * 1000), S.tStart + minShowSecs(q) * 1000);
 }
+const minShowSecs = q => CFG.typedMin + (/season is this/i.test(q.prompt || '') ? CFG.statLineExtra : 0);
 function answerChoice(q, u, idx) {
   if (idx == null || S.answered.has(u)) return;      // first answer counts: no spamming every option
   if (q.type === 'mc' && S.struck.has(idx)) return;
