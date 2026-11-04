@@ -832,7 +832,10 @@ def gen_true_false(bank, PL, famous):
 
 # ---------------------------------------------------------------- main
 THEMES = ["Career Paths", "Stat Lines", "Draft & Bio", "Awards & Rings", "Record Book", "Money Talks",
-          "Jersey Kings", "Around the World", "Name the Face", "Franchise Legends"]
+          "Jersey Kings", "Around the World", "Name the Face", "Franchise Legends",
+          # Nov 2026 formats (generator/more_formats.py)
+          "Teammates", "Shot Charts", "Odd One Out", "Head to Head", "Clutch & Streaks", "Ratings & Votes",
+          "Around the League", "Tonight in the NBA"]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -863,6 +866,12 @@ def main():
     gen_faces(bank, PL, famous)
     gen_franchise(bank, PL)
     gen_battles(bank, PL, famous)
+
+    # Nov 2026 formats: teammates, birthdays, hometowns, clubs, shot charts, 2K, odd one out, order it, ...
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import more_formats
+    more_formats.register(sys.modules[__name__])
+    more_formats.run_all(bank, PL, famous, P, a.src)
 
     # team colours for the looks that show them: photo file -> franchise code
     # (active players: their current team; retired players: the team they played the most seasons for)

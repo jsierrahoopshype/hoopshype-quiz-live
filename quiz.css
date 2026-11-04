@@ -491,3 +491,33 @@ body[data-layout="matchup"] .wordmark .nq { font-size: 36px; }
 /* keep the champion's name readable next to the logo: smaller label, full-size name */
 #gameno .champ { font-size: .78em; }
 #gameno .champ b { font-size: 1.28em; }
+
+/* Order it: three players side by side */
+.order { margin-top: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.oside { position: relative; background: var(--tint); padding: 22px 12px 18px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.oside .k { position: absolute; top: 0; left: 0; width: 70px; height: 70px; background: var(--ink); color: #fff; display: grid; place-items: center; font-family: var(--cond); font-weight: 800; font-size: 50px; }
+.oside .photo { width: 170px; height: 170px; margin-top: 18px; }
+.oside .nm { margin-top: 14px; font-family: var(--cond); font-weight: 800; font-size: 38px; line-height: 1; min-height: 76px; display: grid; place-items: center; }
+.oside .val { margin-top: 8px; font-family: var(--cond); font-weight: 800; font-size: 34px; color: var(--green); }
+.oside.right { box-shadow: inset 0 0 0 5px var(--green); }
+body[data-layout="courtside"] .oside { background: #fff; border: 3px solid var(--ink); }
+
+/* Shot chart (guess the player) */
+.shotrow { margin-top: 16px; display: flex; gap: 26px; align-items: flex-start; }
+.shotrow .clues { flex: 1; margin-top: 0; }
+.shotwrap { flex: none; display: flex; flex-direction: column; align-items: center; }
+.court { width: 470px; height: 395px; }
+.court .fl { fill: #f4ede1; }
+.court .ln { fill: none; stroke: #b9ad97; stroke-width: 2.5; }
+.court .mk { fill: var(--green); fill-opacity: .8; }
+.court .ms { stroke: #d23b30; stroke-width: 2.5; stroke-opacity: .75; fill: none; }
+.shotkey { margin-top: 6px; font-size: 24px; font-weight: 600; color: var(--sub); display: flex; align-items: center; gap: 10px; }
+.mk-k { width: 16px; height: 16px; border-radius: 50%; background: var(--green); display: inline-block; }
+.ms-k { width: 16px; height: 16px; display: inline-block; background: linear-gradient(45deg, transparent 42%, #d23b30 42% 58%, transparent 58%), linear-gradient(-45deg, transparent 42%, #d23b30 42% 58%, transparent 58%); margin-left: 16px; }
+/* with a shot chart on screen the clues and letters sit tighter */
+#panel-body:has(.shotwrap) .clues.compact .clue { font-size: 26px; padding: 6px 0; }
+#panel-body:has(.shotwrap) .prompt { font-size: 54px; }
+#panel-body:has(.shotwrap) .tile { height: 60px; font-size: 46px; width: 48px; }
+
+/* Survivor tag in the theme bar */
+#theme-name .tag.surv { background: var(--accent); color: #fff; }

@@ -18,8 +18,15 @@ const DEFAULTS = {
   battleSlot: 4,                       // a chat battle is dropped in as question #5 of every game
   // seconds per question: 12 at most when you pick an answer (A/B/C/D, true/false, A or B),
   // 15 at most when you have to type something (a player, a team, a number)
-  times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, reveal: 6, intro: 4, recap: 6, voteResult: 3 },
-  blitzTimes: { guess: 10, mc: 7, tf: 6, hl: 6, battle: 8, board: 10, closest: 10 },
+  times: { guess: 15, mc: 12, tf: 10, hl: 10, battle: 12, board: 15, closest: 15, anyof: 15, order: 12, predict: 15, speed: 6,
+           reveal: 6, speedReveal: 3, intro: 4, recap: 6, voteResult: 3 },
+  blitzTimes: { guess: 10, mc: 7, tf: 6, hl: 6, battle: 8, board: 10, closest: 10, anyof: 10, order: 8 },
+  // game shows: every 3rd game is a Survivor game, every 2nd game ends with a 5-question speed round
+  survivorEvery: 3, survivorBonus: 300, speedEvery: 2, speedBase: 25,
+  // tonight's games (for Predict tonight) and their finals, from the public nba-alt-standings repo
+  scheduleUrl: 'https://raw.githubusercontent.com/jsierrahoopshype/nba-alt-standings/HEAD/data/schedule_2026-27.json',
+  finalsBase: 'https://raw.githubusercontent.com/jsierrahoopshype/nba-alt-standings/HEAD/data/games/',
+  predictPoints: [300, 200, 100], predictExact: 500,
   points: { easy: 50, medium: 75, hard: 100, rank: [50, 30, 20], board: 40, battle: 20, follow: 25, share: 50, perCoin: 10, closest: [150, 100, 50], exact: 300 },
   afterFirstCorrect: 5,                // seconds left once somebody names the player
   likeGoal: 1500, likeGoalGrowth: 1.4,
@@ -173,7 +180,7 @@ const who = u => esc(displayName(u)) + trophyTag(u) + (P.teams[u] ? ` <span clas
 // at 6am ET, so a late game night stays one night. Weeks start Monday, so the weekly board resets on Mondays.
 // log: every point scored in the last hour, as [unix seconds, user, points], for the rolling 15-minute and 1-hour boards
 // titles: { user: { n: nights won, w: weeks won } }, kept forever. awarded: which nights/weeks were already handed out.
-const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] } };
+const P = { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] }, preds: {}, rare: {} };
 function etDate(d = new Date()) {
   const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   et.setHours(et.getHours() - 6);
@@ -279,7 +286,7 @@ async function loadState() {
   let saved = null;
   try { const r = await fetch('/state' + (PRACTICE ? '?practice=1' : ''), { cache: 'no-store' }); if (r.ok) saved = await r.json(); } catch (e) {}
   if (!saved || !Object.keys(saved).length) saved = store(PRACTICE ? 'hhq_state_practice' : 'hhq_state') || {};
-  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] } }, saved);
+  Object.assign(P, { days: {}, weeks: {}, gifters: {}, teams: {}, names: {}, log: [], titles: {}, awarded: { n: [], w: [] }, preds: {}, rare: {} }, saved);
   if (!Array.isArray(P.log)) P.log = [];
   pruneLog();
 }
@@ -350,10 +357,21 @@ function maybeJoinTeam(u, text) {
 const isTF = q => q.type === 'mc' && q.options.length === 2 && q.options[0] === 'True';
 
 // ------------------------------------------------------------------ question picking
-function pickQueue(theme) {
+// Dated questions: "last night" and Vegas questions are only good on the day they were built for,
+// birthdays only on that day of the year, and the referee round runs once a night.
+const etToday = () => { const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })); return d; };
+function usableToday(q) {
+  if (q.validOn && q.validOn !== nightKey()) return false;
+  if (q.mmdd) { const d = etDate(); if (q.mmdd !== `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`) return false; }
+  if (q.rare && P.rare && P.rare[nightKey()]) return false;
+  return true;
+}
+const CHOICE = q => q.type === 'mc' || q.type === 'hl' || q.type === 'order';
+function pickQueue(theme, opts = {}) {
   const all = S.data.questions;
+  const base = q => q.type !== 'battle' && !(q.type === 'board' && q.slots.length > 6) && usableToday(q) && (!opts.choiceOnly || CHOICE(q));
   // boards with more than 6 names can't be filled in 15 seconds, so they sit out
-  const pool = all.filter(q => q.type !== 'battle' && !(q.type === 'board' && q.slots.length > 6) && (theme === 'Mixed' || q.theme === theme));
+  const pool = all.filter(q => base(q) && (theme === 'Mixed' || q.theme === theme));
   let fresh = pool.filter(q => !S.used.has(q.id));
   if (fresh.length < CFG.questionsPerGame * 2) {           // theme exhausted: forget its history
     pool.forEach(q => S.used.delete(q.id)); fresh = pool.slice();
@@ -361,21 +379,38 @@ function pickQueue(theme) {
   const byDiff = { easy: [], medium: [], hard: [] };
   shuffle(fresh).forEach(q => (byDiff[q.difficulty] || byDiff.medium).push(q));
   const out = [], typeCount = {};
-  const cap = { board: 1, closest: 2 };
+  const cap = { board: 1, closest: 2, order: 2, anyof: 2 };
   let guard = 0;
   while (out.length < CFG.questionsPerGame && guard++ < 400) {
     const r = Math.random();
     const d = r < CFG.diffMix.easy ? 'easy' : r < CFG.diffMix.easy + CFG.diffMix.medium ? 'medium' : 'hard';
     const list = byDiff[d].length ? byDiff[d] : (byDiff.medium.length ? byDiff.medium : byDiff.easy.length ? byDiff.easy : byDiff.hard);
     if (!list.length) break;
-    const idx = list.findIndex(q => (typeCount[q.type] || 0) < (cap[q.type] ?? 99) && (!out.length || out[out.length - 1].type !== q.type || guard > 200));
+    const idx = list.findIndex(q => (typeCount[q.type] || 0) < (cap[q.type] ?? 99) && (!out.length || out[out.length - 1].type !== q.type || guard > 200)
+      && !(q.rare && out.some(x => x.rare)));
     if (idx < 0) { list.shift(); continue; }
     const q = list.splice(idx, 1)[0];
     typeCount[q.type] = (typeCount[q.type] || 0) + 1;
     out.push(q);
   }
-  const battles = shuffle(all.filter(q => q.type === 'battle' && !S.used.has(q.id)));
-  if (battles.length && out.length > CFG.battleSlot) out.splice(CFG.battleSlot, 0, battles[0]);
+  // a small theme (like Tonight in the NBA) is topped up with anything else
+  if (out.length < CFG.questionsPerGame) {
+    const ids = new Set(out.map(q => q.id));
+    const extra = shuffle(all.filter(q => base(q) && !ids.has(q.id) && !S.used.has(q.id) && q.type !== 'board' && !q.rare));
+    while (out.length < CFG.questionsPerGame && extra.length) out.push(extra.shift());
+  }
+  if (!opts.choiceOnly) {
+    const battles = shuffle(all.filter(q => q.type === 'battle' && !S.used.has(q.id)));
+    if (battles.length && out.length > CFG.battleSlot) out.splice(CFG.battleSlot, 0, battles[0]);
+    // Predict tonight: one of tonight's games that hasn't tipped off yet, as question 3
+    const pq = predictQuestion();
+    if (pq) out.splice(Math.min(2, out.length), 0, pq);
+  }
+  if (opts.speed) {
+    // speed round: five true-or-false questions in a row, 6 seconds each, points doubling
+    const tf = shuffle(all.filter(q => isTF(q) && usableToday(q) && !S.used.has(q.id) && !out.includes(q))).slice(0, 5);
+    tf.forEach((q, i) => out.push(Object.assign({}, q, { speed: i + 1 })));
+  }
   return out;
 }
 function markUsed(q) { S.used.add(q.id); store('hhq_used', [...S.used].slice(-4000)); }
@@ -386,12 +421,53 @@ function rollVoteThemes() {
   renderVote();
 }
 
+// ------------------------------------------------------------------ Predict tonight
+// One of tonight's games that hasn't started: chat guesses the combined final score. Guesses are saved, and the
+// next time the quiz runs after the game it reads the final from nba-alt-standings and pays the closest three.
+let SCHEDULE = [];
+async function loadSchedule() {
+  try { const r = await fetch(CFG.scheduleUrl, { cache: 'no-store' }); if (r.ok) SCHEDULE = (await r.json()).games || []; } catch (e) {}
+}
+const TEAM_FULL = c => (TEAMS[c] ? TEAMS[c][0] : c);
+function predictQuestion() {
+  const tonight = nightKey(), soon = now() + 10 * 60 * 1000;
+  const g = SCHEDULE.find(g => g.date === tonight && Date.parse(g.tip) > soon && !(P.preds[g.key] && P.preds[g.key].asked));
+  if (!g) return null;
+  return { type: 'closest', predict: { key: g.key, date: g.date }, theme: 'Tonight in the NBA', difficulty: 'medium', id: 'predict-' + g.key,
+    prompt: `Predict tonight: ${TEAM_FULL(g.away)} at ${TEAM_FULL(g.home)}. Total points?`, sub: 'Both teams combined. Closest guess wins at the next stream',
+    value: 0, answer: '' };
+}
+function lockPrediction(q) {
+  const k = q.predict.key;
+  const rec = (P.preds[k] ||= { date: q.predict.date, label: q.prompt.replace(/^Predict tonight: /, '').replace(/\. Total points\?$/, ''), entries: {}, asked: true });
+  rec.asked = true;
+  for (const [u, a] of S.closest) rec.entries[u] = Math.round(a.v);
+  saveSoon();
+}
+async function settlePredictions() {
+  for (const [k, rec] of Object.entries(P.preds)) {
+    if (rec.date >= nightKey()) continue;                       // game is tonight or later
+    let fin = null;
+    try { const r = await fetch(`${CFG.finalsBase}${rec.date}/${k.split('_')[1]}.json`, { cache: 'no-store' }); if (r.ok) fin = await r.json(); } catch (e) {}
+    const total = fin && fin.home && fin.away && fin.home.score != null ? fin.home.score + fin.away.score : null;
+    if (total == null) { if (Date.parse(rec.date) < now() - 4 * 864e5) delete P.preds[k]; continue; }   // never finished: drop after 4 days
+    const rows = Object.entries(rec.entries).map(([u, v]) => ({ u, v, d: Math.abs(v - total) })).sort((a, b) => a.d - b.d).slice(0, 3);
+    rows.forEach((r, i) => addPoints(r.u, r.d === 0 ? CFG.predictExact : CFG.predictPoints[i]));
+    addAlert(`Prediction result: ${esc(rec.label)} finished with <b>${total}</b> points.` +
+      (rows.length ? ` Closest: <b>${esc(displayName(rows[0].u))}</b> (${rows[0].v}) +${rows[0].d === 0 ? CFG.predictExact : CFG.predictPoints[0]}` : ' Nobody guessed'));
+    delete P.preds[k];
+    saveSoon();
+  }
+}
+
 // ------------------------------------------------------------------ game flow
 function setPhase(p, secs) { S.phase = p; S.tStart = now(); S.dur = secs * 1000; S.tEnd = S.tStart + S.dur; S._lastTick = null; }
 function startGame(theme) {
   S.game += 1;
   S.theme = theme;
-  S.queue = pickQueue(theme);
+  // game shows: Survivor every 3rd game (pick-an-answer questions only), a speed round at the end of every 2nd game
+  S.survivor = S.game % CFG.survivorEvery === 0 ? { alive: new Set(), out: new Set(), started: false, over: false } : null;
+  S.queue = pickQueue(theme, { choiceOnly: !!S.survivor, speed: !S.survivor && S.game % CFG.speedEvery === 0 });
   S.qi = 0; S.q = null;
   S.gameScores = new Map(); S.gameTeams = new Map(); S.qLog = []; S.dry = 0;
   S.stats = { answers: 0, players: new Set(), fastest: null, coins: 0 };
@@ -407,9 +483,11 @@ function nextQuestion() {
   S.battleVotes = [0, 0];
   if (S.blitzQueued && !S.blitzLeft) { S.blitzLeft = S.blitzQueued; S.blitzQueued = 0; addAlert('<b>BLITZ ROUND</b>: double points, half the time'); }
   const blitz = S.blitzLeft > 0;
-  const tType = isTF(q) ? 'tf' : q.type;
-  const secs = (blitz ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 20;
+  const tType = q.speed ? 'speed' : q.predict ? 'predict' : isTF(q) ? 'tf' : q.type;
+  const secs = (blitz && !q.speed ? CFG.blitzTimes[tType] : null) || CFG.times[tType] || 15;
   S.qMult = (blitz ? 2 : 1) * S.mult;
+  if (q.speed === 1) addAlert('<b>SPEED ROUND</b>: 5 true-or-false, 6 seconds each, points double every question');
+  if (q.type === 'order') S.orderAns = new Map();
   setPhase('question', secs);
   planReveals(q, secs);
   renderQuestion();
@@ -419,12 +497,16 @@ function endQuestion() {
   const q = S.q;
   markUsed(q);
   if (q.type === 'mc' || q.type === 'hl') scoreChoice(q);
-  if (q.type === 'closest') scoreClosest(q);
+  if (q.type === 'order') scoreOrder(q);
+  if (q.type === 'closest' && !q.predict) scoreClosest(q);
+  if (q.predict) lockPrediction(q);
   if (q.type === 'battle') scoreBattle(q);
+  if (q.rare) { P.rare[nightKey()] = true; saveSoon(); }
+  if (S.survivor && CHOICE(q)) survivorStep(q);
   if (S.blitzLeft > 0) S.blitzLeft -= 1;
   if (S.mult > 1) { S.mult = 1; S.multBy = null; }
   logQuestion(q);
-  setPhase('reveal', CFG.times.reveal);
+  setPhase('reveal', q.speed ? CFG.times.speedReveal : CFG.times.reveal);
   sfx.reveal();
   renderReveal();
 }
@@ -432,7 +514,7 @@ function endQuestion() {
 function logQuestion(q) {
   if (q.type === 'battle') return;
   const got = q.type === 'board' ? S.filled.filter(f => f && !f.hint).length : q.type === 'closest' ? S.closest.size : S.correct.length;
-  const tried = q.type === 'mc' || q.type === 'hl' ? S.answered.size : q.type === 'closest' ? S.closest.size : S.chatters.size;
+  const tried = q.type === 'mc' || q.type === 'hl' || q.type === 'order' ? S.answered.size : q.type === 'closest' ? S.closest.size : S.chatters.size;
   const total = q.type === 'board' ? q.slots.length : tried;
   S.qLog.push({ q, got, tried, ratio: total ? got / total : 0 });
   // closest-number questions always have a "winner", so they don't count as a miss
@@ -455,7 +537,10 @@ function easeUp() {
   }
   S.eased = swapped > 0;
 }
-function endGame() { setPhase('recap', CFG.times.recap); renderRecap(); makeRecapCards(); saveNow(); }
+function endGame() {
+  S.survivorPaid = survivorPayout();
+  setPhase('recap', CFG.times.recap); renderRecap(); makeRecapCards(); saveNow();
+}
 function afterRecap() {
   let best = -1, idx = 0;
   S.votes.forEach((v, i) => { if (v > best) { best = v; idx = i; } });
@@ -548,6 +633,60 @@ function onChat(u, text) {
   if (q.type === 'hl' || q.type === 'battle') return answerChoice(q, u, sideIndex(q, text));
   if (q.type === 'board') return answerBoard(q, u, text);
   if (q.type === 'closest') return answerClosest(q, u, text);
+  if (q.type === 'anyof') return answerAnyOf(q, u, text);
+  if (q.type === 'order') return answerOrder(q, u, text);
+}
+// ---- Teammates: any of several names is right. Each person scores once.
+function answerAnyOf(q, u, text) {
+  if (S.correct.some(c => c.u === u)) return;
+  const hit = q.answers.find(a => nameMatch(text, a.accept));
+  if (!hit) return;
+  const rank = S.correct.length;
+  registerCorrect(u, basePoints(q) + (CFG.points.rank[rank] || 0) * (S.qMult || 1));
+  S.correct[S.correct.length - 1].said = hit.name;
+}
+// ---- Order it: type the three letters, e.g. BAC. Your first answer counts.
+function answerOrder(q, u, text) {
+  if (S.orderAns.has(u)) return;
+  const t = String(text).toUpperCase().replace(/[^ABC]/g, '');
+  if (t.length !== 3 || new Set(t).size !== 3) return;
+  S.orderAns.set(u, { t, at: now() });
+  S.answered.set(u, { idx: t === q.order ? 1 : 0, at: now() });
+  S.stats.answers++;
+  renderLive();
+}
+function scoreOrder(q) {
+  const rows = [...S.orderAns.entries()].sort((a, b) => a[1].at - b[1].at);
+  let rank = 0;
+  for (const [u, a] of rows) {
+    if (a.t === q.order) { registerCorrect(u, basePoints(q) + (CFG.points.rank[rank++] || 0) * (S.qMult || 1), true); }
+    else if (a.t[0] === q.order[0]) { addPoints(u, Math.round(basePoints(q) * 0.4)); S.streaks.set(u, 0); S.partial = (S.partial || 0) + 1; }
+    else S.streaks.set(u, 0);
+  }
+}
+// ---- Survivor: answer every question right or you're out
+function survivorStep(q) {
+  const sv = S.survivor;
+  if (sv.over) return;
+  const right = new Set(S.correct.map(c => c.u));
+  const answered = new Set(S.answered.keys());
+  if (!sv.started) {
+    answered.forEach(u => (right.has(u) ? sv.alive : sv.out).add(u));
+    sv.started = answered.size > 0;
+    sv.lastOut = sv.out.size;
+    return;
+  }
+  let knocked = 0;
+  for (const u of [...sv.alive]) if (!right.has(u)) { sv.alive.delete(u); sv.out.add(u); knocked++; }
+  sv.lastOut = knocked;
+  if (!sv.alive.size) sv.over = true;
+}
+function survivorPayout() {
+  const sv = S.survivor;
+  if (!sv || !sv.alive.size) return 0;
+  const pts = CFG.survivorBonus * (sv.alive.size <= 3 ? 2 : 1);   // the last few standing get double
+  sv.alive.forEach(u => addPoints(u, pts));
+  return pts;
 }
 function choiceIndex(q, text) {
   const t = norm(text);
@@ -571,7 +710,7 @@ function sideIndex(q, text) {
   for (let i = 0; i < 2; i++) if (nameMatch(text, acceptFor(q.sides[i].name))) return i;
   return null;
 }
-const basePoints = q => (CFG.points[q.difficulty] || 60) * (S.qMult || 1);
+const basePoints = q => (q.speed ? CFG.speedBase * 2 ** (q.speed - 1) : (CFG.points[q.difficulty] || 60)) * (S.qMult || 1);
 function answerGuess(q, u, text) {
   if (S.correct.some(c => c.u === u) || !nameMatch(text, q.accept)) return;
   const P = S.revealPlan;
@@ -707,7 +846,9 @@ function renderThemebar() {
   const c = champion();
   $('#gameno').innerHTML = c ? `<span class="champ">Last night's champ: <b>${esc(displayName(c.u))}</b>${trophyTag(c.u)}</span>` : '';
   let tag = '';
-  if (S.phase === 'question' || S.phase === 'reveal') {
+  if (S.survivor && !['recap', 'voteResult'].includes(S.phase)) tag = `<span class="tag surv">SURVIVOR${S.survivor.started ? `: ${S.survivor.alive.size} LEFT` : ''}</span>`;
+  else if (S.q && S.q.speed && (S.phase === 'question' || S.phase === 'reveal')) tag = `<span class="tag">SPEED ${S.q.speed}/5</span>`;
+  else if (S.phase === 'question' || S.phase === 'reveal') {
     if (S.blitzLeft > 0) tag = '<span class="tag">BLITZ</span>';
     else if (S.qMult > 1) tag = '<span class="tag">DOUBLE POINTS</span>';
   }
@@ -758,10 +899,30 @@ const THEME_DESC = {
   'Around the World': 'The league\'s international stars.',
   'Name the Face': 'The photo zooms out. Name him first.',
   'Franchise Legends': 'Every team\'s top scorers since 2000-01.',
+  'Teammates': 'Name anyone who played with both of them.',
+  'Shot Charts': 'One season of shots. Whose chart is it?',
+  'Odd One Out': 'Three of them have something in common. Find the fourth.',
+  'Head to Head': 'Who won more when they faced each other?',
+  'Clutch & Streaks': 'Game-winners, clutch points and the longest streaks.',
+  'Ratings & Votes': 'NBA 2K ratings, award votes and the GM survey.',
+  'Around the League': 'Arenas, crowds and the officials.',
+  'Tonight in the NBA': 'Last night, birthdays and the standings today.',
   'Mixed': 'A bit of everything.',
 };
 function renderIntro() {
   renderThemebar();
+  if (S.survivor) {
+    body().innerHTML = `<div class="big-center"><div class="title">Survivor</div><div class="desc">${esc(S.theme)}: ${esc(THEME_DESC[S.theme] || '')}</div></div>
+    <div class="rules">
+      <div class="rule"><b>1</b>Answer the first question to get in</div>
+      <div class="rule"><b>2</b>One wrong or missed answer and you're out</div>
+      <div class="rule"><b>3</b>Everyone still standing at the end gets +${CFG.survivorBonus}. Three or fewer: double</div>
+    </div>`;
+    setInstruction(`${S.queue.length} questions. Starting in`, 'wait');
+    setEvent('Survivor game: pick-an-answer questions only');
+    renderBoards();
+    return;
+  }
   body().innerHTML = `<div class="big-center"><div class="title">${esc(S.theme)}</div><div class="desc">${esc(THEME_DESC[S.theme] || '')}</div></div>
     <div class="rules">
       <div class="rule"><b>1</b>Type your answer in the chat. Fastest scores most</div>
@@ -779,7 +940,10 @@ function instructionFor(q) {
   if (q.type === 'hl') return 'Type A or B';
   if (q.type === 'battle') return 'Vote: type A or B';
   if (q.type === 'board') return 'Type as many names as you can';
+  if (q.predict) return 'Type your guess for the total points';
   if (q.type === 'closest') return 'Type a number. Closest wins';
+  if (q.type === 'anyof') return 'Type any player who fits';
+  if (q.type === 'order') return 'Type the order, like BAC';
   return 'Type your answer';
 }
 function promptHtml(q) {
@@ -789,7 +953,11 @@ function renderQuestion(keepEvent) {
   renderThemebar();
   const q = S.q;
   setInstruction(instructionFor(q));
-  if (!keepEvent) setEvent(q.type === 'battle' ? 'No wrong answers. Everyone on the winning side scores'
+  if (!keepEvent) setEvent(q.speed ? `Speed round ${q.speed} of 5: worth ${basePoints(q)} points`
+    : q.predict ? 'No right answer yet. We score it at the next stream, closest wins up to 500'
+    : q.type === 'anyof' ? `${q.answers.length} players fit. Everyone who names one scores`
+    : q.type === 'order' ? `Exact order: ${basePoints(q)} points. Top one right: ${Math.round(basePoints(q) * 0.4)}`
+    : q.type === 'battle' ? 'No wrong answers. Everyone on the winning side scores'
     : q.type === 'board' ? `${CFG.points.board * (S.qMult || 1)} points for every name you find`
     : q.type === 'closest' ? 'Your last number counts. Top 3 closest score'
     : q.type === 'guess' ? 'Clues and letters appear as the clock runs down'
@@ -805,7 +973,12 @@ function renderQuestion(keepEvent) {
     h += promptHtml(q) + slotsHtml(q, false) + `<div class="found">${S.filled.filter(Boolean).length} of ${q.slots.length} found</div>`;
   } else if (q.type === 'closest') {
     h += q.image ? `<div class="row-head">${photo(q.image, 'sm')}<div style="flex:1">${promptHtml(q)}</div></div>` : promptHtml(q);
+    if (q.facts) h += '<div class="clues">' + q.facts.map((c, i) => `<div class="clue"><span class="n">${i + 1}</span><span>${esc(c)}</span></div>`).join('') + '</div>';
     h += `<div class="closest-body"><div class="guesscount" id="gcount">0<small>guesses</small></div></div>`;
+  } else if (q.type === 'anyof') {
+    h += promptHtml(q) + `<div class="vs">${q.sides.map(s => `<div class="side">${photo(s.img)}<div class="nm">${esc(s.name)}</div></div>`).join('')}</div>`;
+  } else if (q.type === 'order') {
+    h += promptHtml(q) + orderHtml(q, false);
   }
   body().innerHTML = h;
   renderLive();
@@ -839,6 +1012,24 @@ function vsHtml(q, reveal) {
   }
   return `<div class="vs">${sides}</div>${split}`;
 }
+function orderHtml(q, reveal) {
+  return '<div class="order">' + q.sides.map((s, i) => {
+    const pos = q.order.indexOf('ABC'[i]);
+    return `<div class="oside${reveal && pos === 0 ? ' right' : ''}"><div class="k">${'ABC'[i]}</div>${photo(s.img, 'sm')}<div class="nm">${esc(s.name)}</div>`
+      + (reveal ? `<div class="val">${pos + 1}. ${esc(s.value)}</div>` : '') + '</div>';
+  }).join('') + '</div>';
+}
+// Half-court shot chart (court units from the Shot Chart Studio data: rim at 250, 52.5, 10 units a foot)
+function shotChartSvg(shots) {
+  const dots = shots.map(([x, y, m]) => m
+    ? `<circle cx="${250 + x}" cy="${52.5 + y}" r="5" class="mk"/>`
+    : `<path d="M${245 + x} ${47.5 + y}l10 10m0 -10l-10 10" class="ms"/>`).join('');
+  return `<svg class="court" viewBox="0 0 500 420" preserveAspectRatio="xMidYMin meet">
+    <rect x="0" y="0" width="500" height="420" class="fl"/>
+    <rect x="170" y="0" width="160" height="190" class="ln"/><circle cx="250" cy="190" r="60" class="ln"/>
+    <path d="M30 0V140A237.5 237.5 0 0 0 470 140V0" class="ln"/><circle cx="250" cy="52.5" r="7.5" class="ln"/>
+    <line x1="220" y1="40" x2="280" y2="40" class="ln"/>${dots}</svg>`;
+}
 function slotsHtml(q, reveal) {
   const one = q.slots.length <= 5 ? ' one' : '';
   return `<div class="slots${one}">` + q.slots.map((s, i) => {
@@ -855,9 +1046,11 @@ function renderGuess() {
   let h = promptHtml(q);
   const zoom = q.imageMode === 'zoom' && q.image;
   if (zoom) h += `<div class="zoombox"><img src="${CFG.imgBase}${encodeURIComponent(q.image)}" alt=""></div>`;
-  h += `<div class="clues${zoom ? ' compact' : ''}">` + q.clues.map((c, i) => i < shown
+  if (q.shots) h += `<div class="shotrow"><div class="shotwrap">${shotChartSvg(q.shots)}<div class="shotkey"><span class="mk-k"></span>Made <span class="ms-k"></span>Missed</div></div>`;
+  h += `<div class="clues${zoom || q.shots ? ' compact' : ''}">` + q.clues.map((c, i) => i < shown
     ? `<div class="clue"><span class="n">${i + 1}</span><span>${esc(c)}</span></div>`
     : `<div class="clue locked"><span class="n">${i + 1}</span><span>Unlocks soon</span></div>`).join('') + '</div>';
+  if (q.shots) h += '</div>';
   const letters = q.answer.replace(/ /g, '').length;
   let pos = 0;
   h += `<div class="letters${letters > 14 ? ' small' : ''}">` + q.answer.split(' ').map(w => {
@@ -880,7 +1073,7 @@ function renderGuess() {
 function renderLive() {
   const q = S.q;
   if (!q || S.phase !== 'question') return;
-  if ((q.type === 'mc' || q.type === 'hl') && S.answered.size) {
+  if ((q.type === 'mc' || q.type === 'hl' || q.type === 'order') && S.answered.size) {
     if (!S.correct.length) setEvent(`<b>${S.answered.size}</b> answer${S.answered.size === 1 ? '' : 's'} locked in`);
   } else if (q.type === 'battle') {
     const [a, b] = S.battleVotes, t = a + b;
@@ -928,6 +1121,24 @@ function renderReveal() {
     setInstruction(`Chat found ${got} of ${q.slots.length}`, 'answer');
     const top = [...S.correct].sort((a, b) => b.pts - a.pts)[0];
     setEvent(top ? `Most found: <b>${esc(displayName(top.u))}</b> +${top.pts}` : 'Nobody found one this time');
+  } else if (q.type === 'anyof') {
+    const shown = q.answers.slice(0, 6);
+    h += promptHtml(q) + '<div class="slots">' + shown.map(a => `<div class="slot got">${photo(a.img, 'xs')}<span><div class="who">${esc(a.name)}</div></span></div>`).join('') + '</div>';
+    h += nCorrect ? winnersHtml(3) : '<div class="nobody">Nobody got one</div>';
+    setInstruction(`${q.answers.length} answers worked`, 'answer');
+    setEvent(nCorrect ? `<b>${nCorrect}</b> named one. First: <b>${esc(displayName(S.correct[0].u))}</b> with ${esc(S.correct[0].said || '')}` : (q.fact || ''));
+  } else if (q.type === 'order') {
+    h += promptHtml(q) + orderHtml(q, true);
+    const top = q.sides['ABC'.indexOf(q.order[0])].name;
+    setInstruction(`Answer: ${q.order}, ${top} first`, 'answer');
+    setEvent(nCorrect ? `<b>${nCorrect}</b> got the exact order. Fastest: <b>${esc(displayName(S.correct[0].u))}</b> +${S.correct[0].pts}${S.partial ? `. ${S.partial} got the top one` : ''}`
+      : S.partial ? `Nobody got the exact order. ${S.partial} got the top one right` : 'Nobody got this one');
+    S.partial = 0;
+  } else if (q.predict) {
+    const n = (P.preds[q.predict.key] && Object.keys(P.preds[q.predict.key].entries).length) || 0;
+    h += promptHtml(q) + `<div class="closest-body"><div class="guesscount">${fmt(n)}<small>predictions locked in</small></div></div>`;
+    setInstruction('Scored at the next stream', 'answer');
+    setEvent('Closest to the final total wins up to 500 points. Come back next stream to see who won');
   } else if (q.type === 'closest') {
     h += `<div class="ans-wrap">${photo(q.image)}<div><div class="ans-name">${esc(q.answer)}</div>${q.fact ? `<div class="ans-fact">${esc(q.fact)}</div>` : ''}<div class="ans-q">${esc(q.prompt)}</div></div></div>`;
     h += '<div class="cl-rows">' + (S.closestRows || []).map((r, i) => `<div class="cl-row"><span>${i + 1}. ${esc(displayName(r.u))} said ${fmt(r.v)}</span><span class="p">+${r.pts}</span></div>`).join('') + '</div>';
@@ -942,6 +1153,10 @@ function renderReveal() {
     setEvent(nCorrect ? `<b>${nCorrect}</b> named him` : '');
   }
   body().innerHTML = h;
+  if (S.survivor && CHOICE(q) && !S.survivor.over) setEvent(S.survivor.started
+    ? `<b>${S.survivor.alive.size}</b> still alive${S.survivor.lastOut ? `, ${S.survivor.lastOut} knocked out` : ''}. Survivors get +${CFG.survivorBonus} at the end`
+    : 'Nobody answered, so Survivor starts with the next question');
+  else if (S.survivor && S.survivor.over && CHOICE(q)) setEvent('Everyone is out. No survivors this game');
   renderBoards();
 }
 function renderRecap() {
@@ -954,6 +1169,7 @@ function renderRecap() {
   const facts = [`${fmt(st.answers)} answers from ${st.players.size} players`];
   const bestTeam = [...S.gameTeams.entries()].sort((a, b) => b[1] - a[1])[0];
   if (bestTeam) facts.push(`Team of the game: ${TEAMS[bestTeam[0]][0]} +${fmt(bestTeam[1])}`);
+  if (S.survivor) facts.unshift(S.survivor.alive.size ? `Survivors: ${[...S.survivor.alive].slice(0, 5).map(displayName).join(', ')}${S.survivor.alive.size > 5 ? ` and ${S.survivor.alive.size - 5} more` : ''} (+${S.survivorPaid} each)` : 'Survivor: nobody made it to the end');
   if (st.fastest) facts.push(`Fastest answer: ${displayName(st.fastest.u)} in ${st.fastest.s.toFixed(1)}s`);
   h += `<div class="ans-fact" style="margin-top:auto">${facts.map(esc).join('<br>')}</div>`;
   body().innerHTML = h;
@@ -1237,11 +1453,13 @@ async function boot() {
     try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { S.data = await r.json(); break; } } catch (e) {}
   }
   if (!S.data) { body().innerHTML = '<div class="big-center"><div class="title">No questions found</div></div>'; return; }
-  S.themes = S.data.themes.slice();
+  // only themes with enough questions today can be voted for (a source that failed to download leaves its theme empty)
+  S.themes = S.data.themes.filter(t => S.data.questions.filter(q => q.theme === t && usableToday(q)).length >= CFG.questionsPerGame * 2);
   renderLikes(); renderBoards();
   setInterval(tick, 200);
   setInterval(rotateStandings, 500);
   awardTitles(); setInterval(awardTitles, 60000);
+  await loadSchedule(); settlePredictions(); setInterval(settlePredictions, 10 * 60 * 1000);
   setInterval(() => { renderStandings(); if (rankShowing) renderMe(); }, 15000);   // rolling windows drop old points even when nobody scores
   if (PRACTICE) startPractice(); else connectBridge();
   startGame(params.get('theme') || 'Mixed');
@@ -1250,5 +1468,5 @@ boot();
 // Save standings when the window closes, so a quick restart doesn't lose the night
 window.addEventListener('beforeunload', () => { try { navigator.sendBeacon('/state' + (PRACTICE ? '?practice=1' : ''), JSON.stringify(P)); } catch (e) {} });
 // Test hooks: play one specific question, or end the current one
-window.HHQ = { onEvent, state: S, saved: P, renderBoards: () => { renderBoards(); renderThemebar(); }, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
+window.HHQ = { onEvent, state: S, saved: P, startGame, settlePredictions, loadSchedule, renderBoards: () => { renderBoards(); renderThemebar(); }, play(q) { S.queue = [q]; S.qi = 0; nextQuestion(); }, end() { S.tEnd = now(); } };
 })();

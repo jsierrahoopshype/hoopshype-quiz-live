@@ -20,15 +20,19 @@ An NBA trivia game that runs on the HoopsHype TikTok LIVE. Viewers answer by typ
 
 ## Question formats
 
-- **Guess the player (letter reveal):** clues and letters appear over time, first correct name scores most.
-- **Multiple choice:** chat types A, B, C or D. First answer per person counts.
-- **True or false.**
-- **Higher or lower:** two players, chat types A or B.
-- **Fill the board:** "Name the top 10 all-time scorers", chat fills the slots.
-- **Closest number wins:** career totals, salaries, draft years.
-- **Chat battles:** opinion votes, everyone on the winning side scores.
+- **Guess the player (letter reveal):** clues and letters appear over time. Also used for shot charts, birthdays ("born on this day"), hometowns and last night's top scorers.
+- **Multiple choice / true or false:** chat types A, B, C or D. Also odd one out, award voting, GM survey, overseas clubs, Vegas standings, arenas and the referee round.
+- **Higher or lower:** two players, chat types A or B. Also draft combine, head to head since 2016-17, clutch points, buzzer-beaters and streaks.
+- **Name anyone who fits:** "a teammate of both A and B". Any right name scores.
+- **Order it:** three players, chat types the order (e.g. BAC). Exact order scores full points, the right top pick scores 40%.
+- **Fill the board** (6 names or fewer), **closest number** (also NBA 2K ratings and "pick the season"), **chat battles**.
+- **Predict tonight:** total points in one of tonight's games. Scored automatically the next time the quiz runs after the final.
+- **Speed round:** every 2nd game ends with 5 true-or-false questions, 6 seconds each, points doubling.
+- **Survivor:** every 3rd game, one wrong or missed answer and you're out. Survivors get +300 (double if three or fewer).
 
-Themes: Career Paths, Stat Lines, Draft & Bio, Awards & Rings, Record Book, Money Talks, Jersey Kings, Around the World, Name the Face, Franchise Legends, plus Mixed.
+Timers: 12 seconds at most to pick an answer, 15 to type one.
+
+The question bank rebuilds every morning (about 5:47am ET) on GitHub, so birthdays, last night's games and the standings are always current.
 
 ## Looks
 
