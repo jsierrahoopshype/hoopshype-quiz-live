@@ -1,0 +1,16 @@
+# docker compose -f linux/docker-compose.yml up -d --build      start (or update after git pull)
+# docker compose -f linux/docker-compose.yml logs -f             watch chat connection and stream status
+# docker compose -f linux/docker-compose.yml down                stop
+services:
+  hoopshype-quiz:
+    build:
+      context: ..
+      dockerfile: linux/Dockerfile
+    container_name: hoopshype-quiz
+    env_file: quiz.env
+    restart: unless-stopped
+    shm_size: "1gb"            # Chromium needs more shared memory than Docker's default 64 MB
+    cpus: "${QUIZ_CPUS:-3}"    # cap so the YouTube stream on the same server keeps its share
+    volumes:
+      - ../saved:/quiz/saved
+      - ../recap-cards:/quiz/recap-cards
